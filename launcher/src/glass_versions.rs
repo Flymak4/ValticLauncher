@@ -50,7 +50,7 @@ fn badge(tone: Tone, label: &str) -> Div {
         .child(ui::text(13., FontWeight::NORMAL, ink::BODY).child(tr(label).to_string()))
 }
 
-/// The compact title and commit line for a published Nightly.
+/// The compact title and commit line for a published Valtic game build.
 ///
 /// The release title from GitHub is an implementation-facing ISO date and commit. Players need
 /// the date first, with the short commit kept as the secondary detail so the newest build is easy
@@ -58,7 +58,7 @@ fn badge(tone: Tone, label: &str) -> Div {
 fn nightly_card_text(release: &Release) -> Option<(String, String)> {
     release.nightly.as_ref()?;
     let date = published(&release.date, "");
-    let title = format!("Valtic Build · {date}");
+    let title = format!("Valtic {}", backend::game_version(&release.tag));
     let commit = horizon_launcher::nightly::label(&release.tag)
         .and_then(|label| {
             label
@@ -200,7 +200,7 @@ impl Launcher {
                 "Imported builds",
                 build_import::is_imported,
                 Some(tr(
-                    "Unsigned: you picked these programs yourself, and Horizon can't \
+                    "Unsigned: you picked these programs yourself, and Valtic can't \
                     check where they came from. Updates never replace them.",
                 )),
                 on_disk,

@@ -171,4 +171,86 @@ impl Launcher {
             .child(ui::text(11., FontWeight::NORMAL, ink::DIM).pt(px(20.))
                 .child("Valtic is an independent community launcher, not an official Mojang product."))
     }
+    /// Minimal build manager: show only the build that corresponds to the
+    /// currently published Minecraft release. Older downloads stay behind a
+    /// clearly labelled opt-in archive for people who need them.
+    pub(super) fn valtic_versions_page(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let latest = match &self.releases {
+            Load::Ready(releases) => releases.iter().find(|r| r.asset.is_some()).cloned(),
+            _ => None,
+        };
+        let tag = latest.as_ref().map(|r| r.tag.clone())
+            .or_else(|| self.selected().cloned())
+            .unwrap_or_default();
+        let version = if tag.is_empty() {
+            "Minecraft".to_string()
+        } else {
+            format!("Valtic {}", backend::game_version(&tag))
+        };
+        let installed = self.installed.iter().any(|v| v == &tag);
+        let selected = self.selected().is_some_and(|v| v == &tag);
+        let busy = self.installing.as_ref().is_some_and(|(v, _)| v == &tag);
+        let cover = self.valtic_cover(&tag, 178.);
+        let mut actions = div().flex().items_center().gap(px(10.));
+        if installed && !selected {
+            let choice = tag.clone();
+            actions = actions.child(
+                ui::solid("valtic-use-current", "Use version", 42., 14., &t)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.settings.selected = Some(choice.clone());
+                        this.save_settings();
+                        cx.notify();
+                    }))
+            );
+        } else if installed {
+            actions = actions.child(ui::text(14., FontWeight::MEDIUM, ink::STRONG)
+                .child("Installed and ready"));
+        } else if let Some(release) = latest {
+            actions = actions.child(
+                ui::solid("valtic-install-current",
+                    if busy { "Installing…" } else { "Install version" },
+                    42., 14., &t)
+                    .when(!busy, |d| d.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.install(&release);
+                        cx.notify();
+                    })))
+            );
+        }
+        let archive = ui::quiet("valtic-more-builds", "Browse older builds", 36., &t)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.show_versions_archive = true;
+                cx.notify();
+            }));
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(24.))
+            .pt(px(12.))
+            .child(ui::text(30., FontWeight::BOLD, ink::FULL).child("Game version"))
+            .child(ui::text(15., FontWeight::NORMAL, ink::BODY)
+                .child("Just the Minecraft version you need. Valtic takes care of the game files."))
+            .child(div()
+                .flex()
+                .flex_wrap()
+                .gap(px(24.))
+                .p(px(26.))
+                .rounded(px(18.))
+                .bg(ui::color(0x171d26))
+                .child(cover)
+                .child(div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .flex_1()
+                    .min_w(px(220.))
+                    .gap(px(12.))
+                    .child(ui::text(12., FontWeight::SEMIBOLD, ink::NOTE)
+                        .child("MINECRAFT JAVA EDITION"))
+                    .child(ui::text(30., FontWeight::BOLD, ink::FULL).child(version))
+                    .child(ui::text(14., FontWeight::NORMAL, ink::BODY)
+                        .child("Official game files. Your worlds and instances stay where they are."))
+                    .child(actions)))
+            .child(archive)
+    }
 }

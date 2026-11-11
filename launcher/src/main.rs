@@ -241,6 +241,7 @@ struct Launcher {
     update_error: Option<String>,
     self_update: SelfUpdate,
     self_update_hidden: bool,
+    show_versions_archive: bool,
     /// The Horizon version being installed as an update, and whether it becomes the selected one.
     update_install: Option<(String, bool)>,
     /// The Horizon version being installed because an instance was made or saved to play it: it
@@ -610,6 +611,7 @@ impl Launcher {
             self_update: horizon_launcher::update_handoff::take_failure()
                 .map_or(SelfUpdate::Idle, |e| SelfUpdate::Stuck(Some(e))),
             self_update_hidden: false,
+            show_versions_archive: false,
             update_install: None,
             instance_install: None,
             install_next: None,
@@ -4950,7 +4952,21 @@ impl Launcher {
         };
         let used: u64 = self.installed.iter().filter_map(on_disk).sum();
         if t.glass {
-            return self.glass_versions(&on_disk, used, cx);
+            if self.show_versions_archive {
+                return div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .child(
+                        button("valtic-back-to-versions", "← Current version", Kind::Ghost, &t)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.show_versions_archive = false;
+                                cx.notify();
+                            })),
+                    )
+                    .child(self.glass_versions(&on_disk, used, cx));
+            }
+            return self.valtic_versions_page(cx);
         }
         // The list's own action at the end of the line above it: a build the player has.
         let import: AnyElement = if self.importing_build {

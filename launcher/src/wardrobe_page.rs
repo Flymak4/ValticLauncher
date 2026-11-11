@@ -475,15 +475,9 @@ impl Launcher {
     /// answer, or the selected account's own (a preview for it, a claim), from this visit or kept
     /// on disk.
     pub(super) fn wardrobe_shown(&self) -> bool {
-        let own = (self.wardrobe.as_ref())
-            .and_then(|w| w.saved.me.as_ref())
-            .map(|m| &m.claim)
-            .or(self.shop_kept.as_ref());
-        horizon_launcher::shop::in_top_bar(
-            horizon_cosmetics::forced(),
-            self.shop_status.as_ref(),
-            own,
-        )
+        // Minecraft Java skin uploads belong in the main navigation, even
+        // when the optional cosmetics service has no products or account.
+        true
     }
 
     /// Ask the cosmetics service whether there is something to show, at start and every half hour

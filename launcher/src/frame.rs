@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 /// The sidebar's width and its distance from the window's edges (`w-[248px]`, `m-3.5`).
-pub const SIDEBAR: f32 = 248.;
-pub const MARGIN: f32 = 14.;
+pub const SIDEBAR: f32 = 228.;
+pub const MARGIN: f32 = 0.;
 
 /// The ⋮ menu of a sidebar row while open: whose, and whether Delete… was pressed once.
 #[derive(Clone, Default)]
@@ -294,14 +294,14 @@ impl Launcher {
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(12.))
+            .gap(px(11.))
             .px(px(16.))
-            .pt(px(18.))
-            .pb(px(12.))
+            .pt(px(22.))
+            .pb(px(24.))
             .child(mark(34., &t))
             .child(
-                ui::text(19., FontWeight::BOLD, ink::FULL)
-                    .child("Valtic Launcher"),
+                ui::text(21., FontWeight::BOLD, ink::FULL)
+                    .child("Valtic"),
             );
         // Real sidebar navigation: the controls open Horizon's existing pages.
         let mut primary_nav = div()
@@ -314,10 +314,10 @@ impl Launcher {
                 ui::text(11., FontWeight::SEMIBOLD, ink::DIM)
                     .px(px(10.))
                     .pb(px(5.))
-                    .child("LAUNCHER"),
+                    .child("YOUR SPACE"),
             );
         for (page, label) in [
-            (Page::Play, "Play"),
+            (Page::Play, "Home"),
             (Page::Mods, "Mods"),
             (Page::Versions, "Versions"),
             (Page::Servers, "Servers"),
@@ -632,13 +632,15 @@ impl Launcher {
                 .child(trf("Launcher {version}", &[("version", backend::VERSION)])),
         );
 
-        crate::glass::plate(radius::PANEL)
+        div()
             .flex()
             .flex_col()
             .flex_none()
             .w(px(SIDEBAR))
-            .my(px(MARGIN))
-            .ml(px(MARGIN))
+            .h_full()
+            .bg(ui::color(0x121721))
+            .border_r_1()
+            .border_color(white(0.07))
             .overflow_hidden()
             .child(brand.relative())
             .child(primary_nav.relative())
@@ -655,7 +657,7 @@ impl Launcher {
         // The top bar tells the player where they are instead of duplicating tabs.
         let compact = self.window_width < crate::glass_home::COMPACT;
         let page_title = match self.page {
-            Page::Play => "Play",
+            Page::Play => "Home",
             Page::Mods => "Mods",
             Page::Servers => "Servers",
             Page::Versions => "Versions",
@@ -668,7 +670,7 @@ impl Launcher {
             .flex_col()
             .flex_none()
             .gap(px(3.))
-            .child(ui::text(11., FontWeight::SEMIBOLD, ink::DIM).child("VALTIC LAUNCHER"))
+            .child(ui::text(11., FontWeight::SEMIBOLD, ink::DIM).child("VALTIC"))
             .child(ui::text(20., FontWeight::BOLD, ink::FULL).child(page_title));
 
         let (name, how) = self.who_plays();
@@ -816,7 +818,7 @@ impl Launcher {
                     .items_center()
                     .gap(px(6.))
                     .children(build_log)
-                    .child(account)
+                    .children(self.accounts.selected().is_some().then_some(account))
                     .children(sign_in)
                     .child(settings),
             )
