@@ -12,13 +12,18 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/build-valtic-windows.yml'
 
+# Required only for the fallback prerelease download if artifact uploads fail.
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: valtic-windows-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
     env:
       # Keep the CRT with the executable, like Horizon's upstream Windows release.
       RUSTFLAGS: -C target-feature=+crt-static
@@ -28,32 +33,73 @@ jobs:
     steps:
       - name: Check out Valtic source
         uses: actions/checkout@v4
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
       - name: Cache Rust builds
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: launcher
+
       - name: Compile Valtic Launcher
         working-directory: launcher
         run: cargo build --release --locked --bin valtic-launcher
-      - name: Verify executable and prepare downloads
+
+      - name: Verify executable and prepare download ZIP
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $exe = 'launcher/target/release/valtic-launcher.exe'
           if (!(Test-Path $exe)) { throw 'Valtic executable was not produced.' }
+
           $version = & $exe --version
           Write-Host $version
-          if ($version -notmatch 'valtic-launcher') { throw 'Build branding check failed.' }
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch 'valtic-launcher') {
+            throw 'Build branding/version check failed.'
+          }
+
           New-Item -ItemType Directory -Path publish -Force | Out-Null
           Copy-Item $exe 'publish/Valtic Launcher.exe'
-          Copy-Item $exe 'publish/valtic-launcher-setup.exe'
           Copy-Item LICENSE 'publish/LICENSE.txt'
           Copy-Item THIRD_PARTY_NOTICES.md 'publish/THIRD_PARTY_NOTICES.md'
           Copy-Item MICROSOFT_SIGN_IN.md 'publish/MICROSOFT_SIGN_IN.md'
-      - name: Provide Valtic Windows applications
+
+          # Never call a plain executable "setup": it is not an installer.
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path 'publish/*' -DestinationPath 'dist/Valtic-Launcher-Windows.zip' -CompressionLevel Optimal -Force
+          $zip = Get-Item 'dist/Valtic-Launcher-Windows.zip'
+          if ($zip.Length -eq 0) { throw 'The Windows download ZIP is empty.' }
+          Write-Host "Created $($zip.Name) ($([math]::Round($zip.Length / 1MB, 2)) MiB)"
+
+      - name: Upload Valtic Windows download
+        id: upload
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        continue-on-error: true
         with:
-          name: Valtic-Launcher-Windows
-          path: publish/
+          name: Valtic-Launcher-Windows-${{ github.run_number }}-${{ github.run_attempt }}
+          path: dist/Valtic-Launcher-Windows.zip
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Create fallback GitHub release if upload fails
+        if: ${{ steps.upload.outcome == 'failure' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "build-${{ github.run_number }}-${{ github.run_attempt }}"
+          gh release create $tag 'dist/Valtic-Launcher-Windows.zip' --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "Valtic Launcher build #${{ github.run_number }} (fallback download)" --notes "Automatic fallback download because the GitHub Actions artifact service failed." --prerelease
+          if ($LASTEXITCODE -ne 0) { throw 'Both artifact upload and fallback release failed.' }
+          "### Valtic Launcher download" >> $env:GITHUB_STEP_SUMMARY
+          "The Actions upload failed, so the ZIP is available from the [fallback GitHub release]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag)." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Show successful artifact download link
+        if: ${{ steps.upload.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          "### Valtic Launcher download" >> $env:GITHUB_STEP_SUMMARY
+          "Download the ZIP from [this run's Artifacts section]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID)." >> $env:GITHUB_STEP_SUMMARY
