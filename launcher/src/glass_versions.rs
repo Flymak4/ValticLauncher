@@ -639,7 +639,7 @@ mod tests {
         };
 
         let (title, commit) = nightly_card_text(&release).expect("nightlies have card text");
-        assert!(title.contains("Nightly"));
+        assert!(title.contains("Valtic Build"));
         assert!(title.contains("Nov 7"));
         assert_eq!(commit, "4aa6854");
     }

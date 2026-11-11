@@ -3438,7 +3438,7 @@ impl Launcher {
                 &[("version", &version)],
             ),
             Some(true) => trf(
-                "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.",
+                "Not prepared. Valtic can download Minecraft {version} from Mojang for your account, or use your own install.",
                 &[("version", &version)],
             ),
             Some(false) => trf(
@@ -3514,7 +3514,7 @@ impl Launcher {
             || {
                 div()
                     .child(if owner {
-                        tr("None needed: Horizon downloads Minecraft from Mojang for your account.")
+                        tr("None needed: Valtic downloads Minecraft from Mojang for your account.")
                     } else {
                         tr("Not found. Choose the folder where your launcher keeps Minecraft.")
                     })
@@ -3718,6 +3718,9 @@ impl Launcher {
         } else {
             self.home_tabs(rows, cx)
         });
+        if t.glass {
+            page = page.child(self.glass_library(cx));
+        }
         if let Some(e) = self.client_error.clone() {
             page = page.child(notice(e, &t));
         }
@@ -3803,7 +3806,7 @@ impl Launcher {
             .child(
                 text(theme::HEADING)
                     .text_color(t.ink)
-                    .child(tr("Horizon crashed")),
+                    .child(tr("Valtic crashed")),
             );
         if !crash.summary.is_empty() {
             body = body.child(div().text_color(t.ink_soft).child(crash.summary));
@@ -4036,7 +4039,7 @@ impl Launcher {
                     .child(group("Account", "user").mt_0())
                     .child(accounts)
                     .child(group("Updates", "reload"))
-                    .child(index_row(n + 1, "Horizon", Some(plain(&horizon)), horizon_action, &t))
+                    .child(index_row(n + 1, "Valtic", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
                         n + 1,
                         tr("Launcher"),
@@ -4120,7 +4123,7 @@ impl Launcher {
                             n + 11,
                             tr("Applications menu"),
                             Some(plain(if self.settings.desktop_entry() {
-                                "Horizon and its icon are in your desktop's menu."
+                                "Valtic and its icon are in your desktop's menu."
                             } else {
                                 "Not in your desktop's menu."
                             })),
@@ -4162,7 +4165,7 @@ impl Launcher {
             .child(tr("The build compiles the game: 20 to 30 minutes and a few GB of disk the first time (it downloads Rust), a few minutes after that.").to_string())
             .children(self.native_update.as_ref().map(|newer| {
                 div().text_color(t.warn).child(trf(
-                    "This moves the instance to Horizon {version}. It compiles the game from scratch, so it takes longer than a normal rebuild: up to 30 minutes.",
+                    "This moves the instance to Valtic build {version}. It compiles the game from scratch, so it takes longer than a normal rebuild: up to 30 minutes.",
                     &[("version", &native_status::horizon_label(newer))],
                 ))
             }));
@@ -4204,9 +4207,9 @@ impl Launcher {
             .mt(px(8.))
             .p(px(12.))
             .bg(t.well)
-            .child(div().text_color(t.danger).child(tr("These mods were made for different Horizon versions").to_string()))
+            .child(div().text_color(t.danger).child(tr("These mods were made for different Valtic builds").to_string()))
             .child(list.to_owned())
-            .child(tr("They often still work together. If the build fails, install versions made for the same Nightly.").to_string())
+            .child(tr("They often still work together. If the build fails, install versions made for the same Valtic build.").to_string())
             .child(
                 div()
                     .flex()
@@ -4989,7 +4992,7 @@ impl Launcher {
                                 .child(tr("Support the work below")),
                         )
                         .child(text(theme::UI).text_color(t.muted).child(tr(
-                            "Horizon is built in the open. Sponsors fund the next release.",
+                            "Valtic is based on open-source technology.",
                         ))),
                 )
                 .child(
@@ -5035,7 +5038,7 @@ impl Launcher {
                 "Imported builds",
                 build_import::is_imported,
                 Some(tr(
-                    "Unsigned: you picked these programs yourself, and Horizon can't \
+                    "Unsigned: you picked these programs yourself, and Valtic can't \
                     check where they came from. Updates never replace them.",
                 )),
                 &on_disk,

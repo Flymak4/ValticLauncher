@@ -125,11 +125,56 @@ impl Launcher {
             .flex()
             .flex_col()
             .min_w_0()
-            .pt(px(64. - crate::glass::CONTENT_INSET))
-            .child(self.edition_tabs(java.is_some(), cx))
-            .child(self.home_title(cx))
-            .child(self.played_text(cx))
-            .child(actions)
+            .pt(px(40. - crate::glass::CONTENT_INSET))
+            .child(ui::text(24., FontWeight::SEMIBOLD, ink::FULL).pb(px(16.)).child("Jump in"))
+            .child(div()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .p(px(24.))
+                .rounded(px(radius::PANEL))
+                .bg(white(fill::BUTTON))
+                .child(self.edition_tabs(java.is_some(), cx))
+                .child(self.home_title(cx))
+                .child(self.played_text(cx))
+                .child(actions))
+    }
+
+    /// Instance cards underneath the Play overview, inspired by Modrinth's Library.
+    pub(super) fn glass_library(&mut self, cx: &mut Context<Self>) -> Div {
+        let mut cards = Vec::new();
+        for instance in self.instances.list.clone() {
+            let clicked = instance.clone();
+            let version = instance.java.as_ref()
+                .map(|j| format!("Minecraft {}", j.minecraft))
+                .or_else(|| self.version_of(&instance)
+                    .map(|tag| format!("Minecraft {}", backend::game_version(tag))))
+                .unwrap_or_else(|| "Valtic Edition".to_string());
+            let icon = self.instance_icon(&instance, 44.);
+            cards.push(
+                div().id(SharedString::from(format!("library-{}", instance.id)))
+                    .flex().items_center().gap(px(12.))
+                    .w(px(264.)).p(px(14.))
+                    .rounded(px(radius::LARGE))
+                    .bg(white(fill::BUTTON))
+                    .hover(|d| d.bg(white(fill::ACTIVE)))
+                    .cursor_pointer()
+                    .child(icon)
+                    .child(div().flex().flex_col().min_w_0()
+                        .child(ui::text(15., FontWeight::SEMIBOLD, ink::FULL)
+                            .truncate().child(instance.name))
+                        .child(ui::text(12., FontWeight::NORMAL, ink::NOTE)
+                            .truncate().child(version)))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.select_instance(&clicked);
+                        this.go(Page::Play);
+                        cx.notify();
+                    }))
+            );
+        }
+        div().flex().flex_col().gap(px(14.)).pt(px(22.))
+            .child(ui::text(22., FontWeight::SEMIBOLD, ink::FULL).child("Your Library"))
+            .child(div().flex().flex_wrap().gap(px(12.)).children(cards))
     }
 
     /// The edition tabs (`Tabs`, size `sm`): the instance's own lit. An instance's edition is
@@ -230,8 +275,8 @@ impl Launcher {
                     .truncate()
                     .font_family(horizon_theme::glass::DISPLAY_FONT)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_size(px(64.))
-                    .line_height(px(64.))
+                    .text_size(px(36.))
+                    .line_height(px(42.))
                     .text_color(white(ink::FULL))
                     .child(instance.name),
             )
@@ -264,18 +309,8 @@ impl Launcher {
                 .hover(|s| s.text_color(white(ink::FULL)))
                 .child(label)
         };
-        let playing = self.playing.map(|count| {
-            let label = format!(
-                "· {}",
-                trf("{count} playing now", &[("count", &thousands(count))])
-            );
-            let url = telemetry::stats_url(&self.links.website);
-            link("playing-now", label).on_click(move |_: &ClickEvent, _, cx| {
-                if let Some(url) = &url {
-                    cx.open_url(url);
-                }
-            })
-        });
+        // Upstream population counts aren't ValticSMP statistics.
+        let playing: Option<Div> = None;
         let official = self.official_players.map(|count| {
             link(
                 "official-players",

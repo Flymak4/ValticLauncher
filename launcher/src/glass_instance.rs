@@ -861,7 +861,7 @@ impl Launcher {
         let selected = self.selected_instance().cloned();
         let from = selected
             .as_ref()
-            .map_or_else(|| "Horizon".into(), |i| i.name.clone());
+            .map_or_else(|| "Valtic".into(), |i| i.name.clone());
         let icon = match &selected {
             Some(i) => self.glass_instance_icon(i, 36.),
             None => self.horizon_mark(36.),

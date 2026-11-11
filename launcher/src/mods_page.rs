@@ -1226,7 +1226,7 @@ impl Launcher {
         }
         let header = page_header(
             "Mods",
-            "Mods and shader packs made for Horizon from its own reviewed registry, and \
+            "Valtic-compatible mods and shader packs from the reviewed registry, and \
              resource packs from Modrinth. Each file is checked against its source's checksum \
              before it reaches your game folder.",
             &t,
@@ -1819,11 +1819,11 @@ impl Launcher {
         if let (Some(tag), Some(build)) = (&version, &build) {
             let said = match pinned.is_empty() {
                 true => trf(
-                    "Plays {build}, built on Horizon {version}.",
+                    "Plays {build}, built on Valtic build {version}.",
                     &[("build", tag), ("version", &build.horizon())],
                 ),
                 false => trf(
-                    "Plays {build}, built on Horizon {commit}, the commit pinned by {mods}, not on {version}.",
+                    "Plays {build}, built on Valtic build {commit}, the commit pinned by {mods}, not on {version}.",
                     &[
                         ("build", tag),
                         ("commit", &build.horizon[..build.horizon.len().min(7)]),
@@ -1866,7 +1866,7 @@ impl Launcher {
                 button(
                     "native-update",
                     trf(
-                        "Rebuild on Horizon {version}",
+                        "Rebuild on Valtic build {version}",
                         &[("version", &native_status::horizon_label(&newer))],
                     ),
                     Kind::Secondary,
@@ -1963,11 +1963,11 @@ impl Launcher {
                     &t,
                 );
             } else if m.source == SourceId::Horizon {
-                tr("Nothing in Horizon's registry matches yet.")
+                tr("Nothing in the Valtic mod registry matches yet.")
             } else if m.everything {
                 tr("Nothing found.")
             } else {
-                tr("Nothing found that runs in Horizon. Show everything lists the rest.")
+                tr("Nothing compatible found. Show everything lists the rest.")
             };
             return centered(line, &t);
         }
