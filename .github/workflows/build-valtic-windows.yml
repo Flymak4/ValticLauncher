@@ -2,6 +2,15 @@ name: Build Valtic Launcher (Windows)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'launcher/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-valtic-windows.yml'
 
 permissions:
   contents: read
