@@ -1,0 +1,50 @@
+name: Build Valtic Launcher (Windows)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      # Keep the CRT with the executable, like Horizon's upstream Windows release.
+      RUSTFLAGS: -C target-feature=+crt-static
+      # Register your OWN Microsoft public client app ID to enable sign-in.
+      HORIZON_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID }}
+      HORIZON_TELEMETRY_URL: "off"
+    steps:
+      - name: Check out Valtic source
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher
+      - name: Compile Valtic Launcher
+        working-directory: launcher
+        run: cargo build --release --locked --bin valtic-launcher
+      - name: Verify executable and prepare downloads
+        shell: pwsh
+        run: |
+          $exe = 'launcher/target/release/valtic-launcher.exe'
+          if (!(Test-Path $exe)) { throw 'Valtic executable was not produced.' }
+          $version = & $exe --version
+          Write-Host $version
+          if ($version -notmatch 'valtic-launcher') { throw 'Build branding check failed.' }
+          New-Item -ItemType Directory -Path publish -Force | Out-Null
+          Copy-Item $exe 'publish/Valtic Launcher.exe'
+          Copy-Item $exe 'publish/valtic-launcher-setup.exe'
+          Copy-Item LICENSE 'publish/LICENSE.txt'
+          Copy-Item THIRD_PARTY_NOTICES.md 'publish/THIRD_PARTY_NOTICES.md'
+          Copy-Item MICROSOFT_SIGN_IN.md 'publish/MICROSOFT_SIGN_IN.md'
+      - name: Provide Valtic Windows applications
+        uses: actions/upload-artifact@v4
+        with:
+          name: Valtic-Launcher-Windows
+          path: publish/
+          if-no-files-found: error
