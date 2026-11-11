@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// The keychain service name every secret is stored under.
 pub const SERVICE: &str = "dev.playhorizon.launcher";
 const SCOPE: &str = "XboxLive.signin offline_access";
-pub const NOT_CONFIGURED: &str = "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.";
+pub const NOT_CONFIGURED: &str = "Microsoft sign-in is not configured in this Valtic build. The launcher developer must register a Microsoft app ID before publishing.";
 /// What every Play says while no account in the launcher owns the game.
 pub const NEEDS_OWNER: &str =
     "Sign in with a Microsoft account that owns Minecraft: Java Edition to play";
@@ -39,8 +39,10 @@ const RENEW_BEFORE: u64 = 3600;
 /// The configured Azure app, if any: the run-time variable wins over the build-time one, and an
 /// empty value means none.
 pub fn client_id() -> Option<String> {
-    std::env::var("HORIZON_MSA_CLIENT_ID")
+    std::env::var("VALTIC_MSA_CLIENT_ID")
         .ok()
+        .or_else(|| std::env::var("HORIZON_MSA_CLIENT_ID").ok())
+        .or_else(|| option_env!("VALTIC_MSA_CLIENT_ID").map(str::to_owned))
         .or_else(|| option_env!("HORIZON_MSA_CLIENT_ID").map(str::to_owned))
         .map(|id| id.trim().to_owned())
         .filter(|id| !id.is_empty())
@@ -80,7 +82,7 @@ fn request_to(method: &str, url: &str) -> ureq::Request {
     crate::proxy::agent(
         ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(20))
-            .user_agent(&format!("horizon-launcher/{}", crate::backend::VERSION)),
+            .user_agent(&format!("valtic-launcher/{}", crate::backend::VERSION)),
         url,
     )
     .build()

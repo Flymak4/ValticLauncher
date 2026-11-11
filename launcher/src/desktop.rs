@@ -84,7 +84,7 @@ pub fn launcher_entry(exe: &Path) -> String {
          Type=Application\n\
          Name=Valtic Launcher\n\
          GenericName=Game launcher\n\
-         Comment=Install, prepare and play Horizon, Minecraft: Java Edition {minecraft} rewritten in Rust\n\
+         Comment=Install and play Minecraft: Java Edition {minecraft} with Valtic Launcher\n\
          Exec={}\n\
          TryExec={}\n\
          Icon=valtic\n\

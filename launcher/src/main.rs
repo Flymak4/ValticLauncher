@@ -52,6 +52,7 @@ mod mods_project;
 mod motion;
 mod multiplayer_page;
 mod native_log_page;
+mod opening_screen;
 mod new_instance;
 mod owner_page;
 mod packs_page;
@@ -1028,7 +1029,7 @@ impl Launcher {
             None => native_mods::base_for(plays.as_deref(), &self.installed, false),
         };
         let Some(base) = base else {
-            let error = tr("Install Horizon first.").to_string();
+            let error = tr("Install a Valtic game version first.").to_string();
             self.native_log_preflight(&error);
             self.native_error = Some(error);
             return;
@@ -4575,7 +4576,7 @@ impl Launcher {
             }
             Some(SignInState::Done(Err(e))) => div().text_color(t.danger).child(e.clone()),
             None if self.accounts.accounts.is_empty() => div().child(tr(
-                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.",
+                "Valtic uses your Microsoft account to verify Minecraft: Java Edition ownership and play online with your profile.",
             )),
             None => div().child(tr("Add another account.")),
         };
@@ -5503,22 +5504,7 @@ impl Render for Launcher {
             // The wordmark arrives letter by letter, then gives way to the launcher; a click or
             // a key skips ahead.
             let gone = 1. - ease_out_cubic(reveal / 0.6);
-            let word = div()
-                .flex()
-                .font_family(theme::PIXEL)
-                .text_size(px(theme::WORDMARK.px * 0.5))
-                .line_height(px(theme::WORDMARK.px * 0.5))
-                .font_weight(FontWeight::BOLD)
-                .text_color(t.ink)
-                .children("VALTIC".chars().enumerate().map(|(i, c)| {
-                    let at = held - i as f32 * theme::STAGGER.as_secs_f32() * 1.5;
-                    let p = ease_out_cubic(at / theme::ENTER.as_secs_f32());
-                    div()
-                        .relative()
-                        .opacity(p)
-                        .top(px(theme::RISE * 2. * (1. - p)))
-                        .child(c.to_string())
-                }));
+            let word = opening_screen::render(held, gone);
             root = root.child(
                 div()
                     .id("opening")

@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
@@ -642,7 +642,19 @@ fn table(language: Language) -> &'static Table {
 
 /// `en` in `language`, or `en` itself where the table lacks it.
 pub fn tr_in(language: Language, en: &str) -> &str {
-    table(language).get(en).copied().unwrap_or(en)
+    let text = table(language).get(en).copied().unwrap_or(en);
+    // Rebrand legacy user-facing translations without modifying internal
+    // identifiers, links, source attribution, or local game data.
+    if !text.contains("Horizon") {
+        return text;
+    }
+    static BRANDED: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let cache = BRANDED.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+    *cache.entry(text.to_owned()).or_insert_with(|| {
+        let branded: &'static str = Box::leak(text.replace("Horizon", "Valtic").into_boxed_str());
+        branded
+    })
 }
 
 /// `en` in the launcher's language.

@@ -26,7 +26,9 @@ jobs:
       # Keep the CRT with the executable, like Horizon's upstream Windows release.
       RUSTFLAGS: -C target-feature=+crt-static
       # Register your OWN Microsoft public client app ID to enable sign-in.
-      HORIZON_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID }}
+      # Microsoft Entra public client ID (not a secret).
+      VALTIC_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID }}
+      HORIZON_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID }}
       HORIZON_TELEMETRY_URL: "off"
     steps:
       - name: Check out Valtic source
@@ -39,6 +41,17 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: launcher
+
+      - name: Validate Microsoft sign-in configuration
+        shell: pwsh
+        run: |
+          $clientId = $env:VALTIC_MSA_CLIENT_ID
+          $parsed = [guid]::Empty
+          if ([string]::IsNullOrWhiteSpace($clientId) -or -not [guid]::TryParse($clientId, [ref]$parsed) -or $parsed -eq [guid]::Empty) {
+            Write-Host "::error::Set VALTIC_MSA_CLIENT_ID in GitHub repository Actions variables. See MICROSOFT_SIGN_IN.md. Refusing to publish a launcher with disabled Microsoft sign-in."
+            exit 1
+          }
+          Write-Host 'Microsoft public client ID is present.'
 
       - name: Compile Valtic Launcher
         working-directory: launcher

@@ -384,7 +384,7 @@ impl Launcher {
         );
         let mut summary = match kind {
             NewKind::Horizon => match self.draft_horizon() {
-                Some(tag) => format!("Horizon · {}", version_label(&tag)),
+                Some(tag) => format!("Valtic · {}", version_label(&tag)),
                 None => "Horizon".into(),
             },
             NewKind::Vanilla => format!("{} · {minecraft}", tr("Vanilla")),
@@ -419,8 +419,8 @@ impl Launcher {
             let (id, title, note) = match k {
                 NewKind::Horizon => (
                     "horizon",
-                    tr("Horizon"),
-                    tr("Minecraft rebuilt in Rust, with Horizon mods").to_string(),
+                    tr("Valtic"),
+                    tr("Minecraft rebuilt in Rust, with Valtic mods").to_string(),
                 ),
                 NewKind::Vanilla => (
                     "vanilla",
@@ -588,7 +588,7 @@ impl Launcher {
         let (busy, copy, error) = (d.busy, d.copy, d.error.clone());
         let title = match (editing, kind) {
             (Some(i), _) => trf("Edit {name}", &[("name", &i.name)]),
-            (None, NewKind::Horizon) => tr("A new Horizon instance").into(),
+            (None, NewKind::Horizon) => tr("A new Valtic instance").into(),
             (None, NewKind::Vanilla) => tr("A new vanilla instance").into(),
             (None, NewKind::Modded) => tr("A new modded instance").into(),
         };
