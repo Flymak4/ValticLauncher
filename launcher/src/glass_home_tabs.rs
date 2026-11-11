@@ -426,7 +426,7 @@ fn patch_source(releases: &[Release], played: Option<&str>) -> Option<(String, S
             .map(|r| (r, patch_sections(&r.body)))
             .find(|(_, sections)| !sections.is_empty());
         if let Some((r, sections)) = nightly {
-            return Some((format!("{} · {}", r.name, day(r)), sections));
+            return Some((format!("Valtic {} · {}", backend::game_version(&r.tag), day(r)), sections));
         }
     }
     let r = releases
@@ -558,14 +558,14 @@ mod tests {
             ),
         ];
         let (note, sections) = patch_source(&releases, Some("nightly-2026-11-01-4aa6854")).unwrap();
-        assert_eq!(note, "Nightly 2026-11-01 · 4aa6854 · Nov 1");
+        assert_eq!(note, "Valtic 26.3 · Nov 1");
         assert_eq!(
             sections,
             vec![("New".to_string(), vec!["Older change".to_string()])]
         );
         // A version that lists no changes: the newest Nightly's.
         let (note, _) = patch_source(&releases, Some("nightly-2026-10-30-0c02067")).unwrap();
-        assert_eq!(note, "Nightly 2026-11-03 · 2944480 · Nov 3");
+        assert_eq!(note, "Valtic 26.3 · Nov 3");
         // A Java instance: the launcher's.
         let (note, sections) = patch_source(&releases, None).unwrap();
         assert_eq!(note, "Launcher 0.2.37 · Nov 2");

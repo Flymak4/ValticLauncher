@@ -249,7 +249,7 @@ impl Launcher {
             Some(
                 div()
                     .child(tr(
-                        "At start and before you play, what you installed from Horizon's registry moves to its newest version for this game. Never inside a modpack, and an update that would remove blocks or items waits for you.",
+                        "At start and before you play, Valtic can check your installed mods for newer compatible versions. Never inside a modpack, and an update that would remove blocks or items waits for you.",
                     ))
                     .into_any_element(),
             ),
@@ -375,7 +375,7 @@ impl Launcher {
             .child(tile(
                 self.horizon_mark(42.),
                 "Valtic".into(),
-                installed.unwrap_or_else(|| tr("Nightly").to_string()),
+                installed.unwrap_or_else(|| tr("Current Minecraft build").to_string()),
                 div()
                     .flex()
                     .flex_col()

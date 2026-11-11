@@ -316,16 +316,17 @@ impl Launcher {
                     .pb(px(5.))
                     .child("YOUR SPACE"),
             );
-        for (page, label) in [
-            (Page::Play, "Home"),
-            (Page::Mods, "Mods"),
-            (Page::Versions, "Versions"),
-            (Page::Servers, "Servers"),
-            (Page::Settings, "Settings"),
+        for (page, label, icon_name) in [
+            (Page::Play, "Home", "home"),
+            (Page::Mods, "Mods", "package"),
+            (Page::Versions, "Versions", "archive"),
+            (Page::Servers, "Servers", "server"),
+            (Page::Settings, "Settings", "sliders-horizontal"),
         ] {
             let active = self.page == page;
             primary_nav = primary_nav.child(
                 ui::row(format!("valtic-primary-{label}"), active, 40., &t)
+                    .child(ui::icon(icon_name, 17., white(ink::STRONG)))
                     .child(
                         div()
                             .flex_none()
@@ -349,6 +350,7 @@ impl Launcher {
             for (page, label) in [(Page::Wardrobe, "Skins")] {
                 primary_nav = primary_nav.child(
                     ui::row(format!("valtic-primary-{label}"), self.page == page, 40., &t)
+                        .child(ui::icon("user", 17., white(ink::STRONG)))
                         .child(
                             ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
                                 .child(label),
@@ -562,15 +564,15 @@ impl Launcher {
                     .px(px(12.))
                     .py(px(8.))
                     .rounded(px(radius::ROW))
-                    .bg(ui::color(horizon_theme::glass::DISCORD))
-                    .hover(|s| s.bg(ui::color(horizon_theme::glass::DISCORD_HOVER)))
+                    .bg(ui::color(0x252d3a))
+                    .hover(|s| s.bg(ui::color(0x303a49)))
                     .cursor_pointer()
                     .child(ui::icon("discord", 18., gpui::white()))
                     .child(
                         ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
                             .min_w_0()
                             .text_center()
-                            .child(tr("Join the Discord")),
+                            .child(tr("Discord community")),
                     )
                     .on_click(move |_, _, cx| cx.open_url(&url)),
                 &t,

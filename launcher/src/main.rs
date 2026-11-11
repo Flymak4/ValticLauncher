@@ -1564,7 +1564,7 @@ impl Launcher {
                             };
                             if let Some(api) = switched {
                                 self.client_error = Some(trf(
-                                    "Horizon's Vulkan renderer crashed while starting on this \
+                                    "The game's Vulkan renderer crashed while starting on this \
                                      graphics card, so the game now uses {api}. Press Play to \
                                      start it again. Video Settings > Graphics API switches back.",
                                     &[("api", api)],
