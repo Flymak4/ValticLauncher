@@ -5660,7 +5660,7 @@ fn page_after_startup(page: Page, data_folder_failed: bool) -> Page {
 fn menus() -> Vec<Menu> {
     vec![
         Menu {
-            name: "Valtic Launcher".into()
+            name: "Valtic Launcher".into(),
             items: vec![MenuItem::action("Quit Valtic Launcher", Quit)],
             disabled: false,
         },
