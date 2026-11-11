@@ -20,6 +20,7 @@ mod github_mods_page;
 mod glass;
 mod glass_account;
 mod glass_home;
+mod valtic_home;
 mod glass_home_lists;
 mod glass_home_mods;
 mod glass_home_packs;
@@ -3625,7 +3626,7 @@ impl Launcher {
                 .flex()
                 .flex_col()
                 .gap(px(24.))
-                .child(self.glass_home_head(&tag, prepared, cx))
+                .child(self.valtic_home_head(&tag, prepared, cx))
                 .children(steps)
         } else {
             let hero = match &java {
@@ -3713,13 +3714,10 @@ impl Launcher {
             page = page.child(notice(e, &t));
         }
         page = page.child(if t.glass {
-            self.glass_home_tabs(rows, cx)
+            self.valtic_home_bottom(rows, cx)
         } else {
             self.home_tabs(rows, cx)
         });
-        if t.glass {
-            page = page.child(self.glass_library(cx));
-        }
         if let Some(e) = self.client_error.clone() {
             page = page.child(notice(e, &t));
         }
@@ -5363,7 +5361,7 @@ impl Render for Launcher {
                 .top_0()
                 .left_0()
                 .size_full()
-                .bg(gpui::rgb(0x0e1014))
+                .bg(gpui::rgb(0x0c1016))
                 .into_any_element()
         } else {
             let (sky, next) = self.sky.render(

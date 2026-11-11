@@ -318,9 +318,9 @@ impl Launcher {
             );
         for (page, label) in [
             (Page::Play, "Play"),
-            (Page::Mods, "Discover"),
-            (Page::Servers, "Servers"),
+            (Page::Mods, "Mods"),
             (Page::Versions, "Versions"),
+            (Page::Servers, "Servers"),
             (Page::Settings, "Settings"),
         ] {
             let active = self.page == page;
@@ -346,7 +346,7 @@ impl Launcher {
         }
         // Cosmetics pages are optional upstream; keep them reachable on a Valtic build.
         if self.wardrobe_shown() {
-            for (page, label) in [(Page::Wardrobe, "Wardrobe"), (Page::Shop, "Shop")] {
+            for (page, label) in [(Page::Wardrobe, "Skins")] {
                 primary_nav = primary_nav.child(
                     ui::row(format!("valtic-primary-{label}"), self.page == page, 40., &t)
                         .child(
@@ -477,14 +477,14 @@ impl Launcher {
             SelfUpdate::Ready(version) => {
                 foot = foot.child(
                     // The version on a line of its own: the title fills the card's width.
-                    card(tr("A new version is available").to_string(), None)
+                    card("New Valtic update available".to_string(), None)
                         .child(
                             ui::text(13., FontWeight::NORMAL, ink::NOTE)
                                 .mt(px(4.))
                                 .child(trf("Launcher {version}", &[("version", version)])),
                         )
                         .child(
-                            ui::solid("update-launcher", tr("Update"), 32., 13., &t)
+                            ui::solid("update-launcher", tr("Update & Restart"), 32., 13., &t)
                                 .mt(px(12.))
                                 .w_full()
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -498,7 +498,7 @@ impl Launcher {
                 let why = self.launcher_update_help(error.as_deref());
                 let url = backend::download_page(&self.links.website);
                 foot = foot.child(
-                    card(tr("A new version is available").to_string(), None)
+                    card("New Valtic update available".to_string(), None)
                         .child(
                             ui::text(13., FontWeight::NORMAL, ink::NOTE)
                                 .mt(px(6.))
@@ -545,35 +545,6 @@ impl Launcher {
             _ => {}
         }
 
-        // Sculk's card (not in the mockup, kept: a sponsor), where the old sidebar had it: at
-        // the sidebar's foot above the links, on every page (Servers shows the wide banner too).
-        // Tall where the sidebar has the height for it besides its rows, compact otherwise.
-        if !self.settings.partner_hidden {
-            let rows = self.instances.list.len() + servers.len();
-            let free = f32::from(window.viewport_size().height)
-                - 2. * MARGIN
-                - 52.
-                - 56. * rows as f32
-                - 190.;
-            let mut side = div().relative().mt(px(12.)).child(partner::card(
-                "partner-side",
-                SIDEBAR - 20.,
-                free < partner::TALL_HEIGHT,
-                &t,
-            ));
-            if self.settings.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
-                side = side.child(
-                    partner::hide_button("partner-hide", &t).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            this.settings.partner_hidden = true;
-                            this.save_settings();
-                            cx.notify();
-                        },
-                    )),
-                );
-            }
-            foot = foot.child(side);
-        }
 
         if !self.links.discord.is_empty() {
             let url = self.links.discord.clone();
@@ -648,7 +619,7 @@ impl Launcher {
         if !self.links.website.is_empty() {
             links = links.child(link(
                 "website",
-                tr("Website"),
+                tr("Our Website"),
                 "globe-02",
                 self.links.website.clone(),
             ));
@@ -685,10 +656,10 @@ impl Launcher {
         let compact = self.window_width < crate::glass_home::COMPACT;
         let page_title = match self.page {
             Page::Play => "Play",
-            Page::Mods => "Discover",
+            Page::Mods => "Mods",
             Page::Servers => "Servers",
             Page::Versions => "Versions",
-            Page::Wardrobe => "Wardrobe",
+            Page::Wardrobe => "Skins",
             Page::Shop => "Shop",
             Page::Settings => "Settings",
         };

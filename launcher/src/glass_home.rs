@@ -339,7 +339,7 @@ impl Launcher {
 
     /// Play and its ⋯ menu (`PlayGroup`): Stop while the game runs, Update when the launcher's
     /// version has a newer one, the progress while preparing, updating or starting.
-    fn play_group(&mut self, tag: &str, ready: bool, cx: &mut Context<Self>) -> Div {
+    pub(super) fn play_group(&mut self, tag: &str, ready: bool, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let accent = ui::color(self.look.accent);
         let running = self.client.is_some();
@@ -542,7 +542,7 @@ impl Launcher {
                         "Stay on {version}",
                         &[(
                             "version",
-                            &horizon_launcher::nightly::label(tag).unwrap_or(tag.to_string()),
+                            &format!("Valtic {}", backend::game_version(tag)),
                         )],
                     ),
                     locked || !ready,
@@ -620,7 +620,7 @@ impl Launcher {
 
     /// The version (`VersionPicker`): "Version" over the one played, a chevron that turns while
     /// its list is open; the list ticks the one played and ends with Manage versions.
-    fn glass_picker(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn glass_picker(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let soft = self.look.accent_soft;
         let label = self.selected().map_or_else(
@@ -713,9 +713,11 @@ impl Launcher {
             for tag in &self.installed {
                 let chosen = self.selected() == Some(tag);
                 let latest = follows.as_ref() == Some(tag);
-                let name = horizon_launcher::nightly::label(tag)
-                    .or_else(|| build_import::label(tag))
-                    .unwrap_or_else(|| tag.clone());
+                let name = if build_import::is_imported(tag) {
+                    build_import::label(tag).unwrap_or_else(|| format!("Valtic {}", backend::game_version(tag)))
+                } else {
+                    format!("Valtic {}", backend::game_version(tag))
+                };
                 let note = if latest {
                     tr("Newest · follows updates").to_string()
                 } else {
