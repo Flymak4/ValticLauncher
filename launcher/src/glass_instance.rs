@@ -385,7 +385,7 @@ impl Launcher {
         let mut summary = match kind {
             NewKind::Horizon => match self.draft_horizon() {
                 Some(tag) => format!("Valtic · {}", version_label(&tag)),
-                None => "Horizon".into(),
+                None => "Valtic".into(),
             },
             NewKind::Vanilla => format!("{} · {minecraft}", tr("Vanilla")),
             NewKind::Modded => format!("{} · {minecraft}", loader.name()),
@@ -404,7 +404,7 @@ impl Launcher {
         // One made in the launcher can switch what it plays; the game's home and modpacks
         // play what they were made with.
         let switches = editing.is_none_or(|i| i.kind == instances::Kind::Own);
-        let kinds = [NewKind::Horizon, NewKind::Vanilla, NewKind::Modded];
+        let kinds = [NewKind::Horizon];
         let names: Vec<&str> = loaders().iter().map(|l| l.name()).collect();
         let modded = match names.split_last() {
             Some((last, [])) => last.to_string(),
@@ -568,6 +568,7 @@ pub(super) fn horizon_choices(releases: &[Release], installed: &[String]) -> Vec
 /// "Nightly · c9d474d", "Imported · 2026-10-30", or the tag.
 fn version_label(tag: &str) -> String {
     horizon_launcher::nightly::label(tag)
+        .map(|label| label.replace("Nightly", "Valtic Build"))
         .or_else(|| build_import::label(tag))
         .unwrap_or_else(|| tag.to_string())
 }

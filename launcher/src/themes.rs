@@ -23,7 +23,7 @@ pub struct Accent {
 // Valtic ships with a crimson accent. Players can still select another colour.
 impl Default for Accent {
     fn default() -> Self {
-        Self { hue: None, rgb: Some(0xE5484D) }
+        Self { hue: None, rgb: Some(0x1BD96A) }
     }
 }
 

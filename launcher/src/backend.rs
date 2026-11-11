@@ -864,10 +864,10 @@ impl Default for Links {
     /// What the launcher uses until (or unless) it can read links.json.
     fn default() -> Self {
         Self {
-            discord: "https://discord.gg/playhorizon".into(),
-            sponsor: "https://github.com/sponsors/ludovic111".into(),
-            website: "https://playhorizon.dev".into(),
-            official_server: crate::server_list::OFFICIAL_ADDRESS.into(),
+            discord: "https://discord.gg/HEGXB6Z6uB".into(),
+            sponsor: String::new(),
+            website: "https://valticsmp.vercel.app/".into(),
+            official_server: "valticsmp.ultramc.co".into(),
             official_server_previous: crate::server_list::OFFICIAL_PREVIOUS
                 .iter()
                 .map(|a| a.to_string())
@@ -910,11 +910,9 @@ impl Links {
 
 /// The links from main, or the built-in ones when offline.
 pub fn links() -> Links {
-    let url = format!("https://raw.githubusercontent.com/{REPO}/main/launcher/links.json");
-    get(&url)
-        .ok()
-        .and_then(|r| r.into_string().ok())
-        .map_or_else(Links::default, |text| Links::parse(&text))
+    // The private Valtic repository cannot use the upstream public links endpoint.
+    // Keep community links and our default server under Valtic's control.
+    Links::parse(include_str!("../links.json"))
 }
 
 /// The launcher's data folder; `HORIZON_LAUNCHER_HOME` overrides it (for tests and scripts).

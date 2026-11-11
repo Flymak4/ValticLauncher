@@ -46,6 +46,7 @@ mod location_page;
 mod markdown;
 mod mcp;
 mod microsoft;
+mod skin_changer;
 mod modpacks_page;
 mod mods_page;
 mod mods_project;
@@ -128,7 +129,7 @@ impl Page {
         let page = match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
             Ok("mods" | "modpacks" | "resourcepacks" | "shaders" | "datapacks") => Page::Mods,
             Ok("servers") => Page::Servers,
-            Ok("wardrobe") if horizon_cosmetics::forced() => Page::Wardrobe,
+            Ok("wardrobe" | "skins") => Page::Wardrobe,
             Ok("shop") if horizon_cosmetics::forced() => Page::Shop,
             Ok("versions") => Page::Versions,
             Ok("settings") => Page::Settings,
@@ -146,9 +147,9 @@ impl Page {
     /// own button.
     const ALL: [(Page, &'static str, &'static str); 7] = [
         (Page::Play, "Play", "home"),
-        (Page::Mods, "Discover", "package"),
+        (Page::Mods, "Mods", "package"),
         (Page::Servers, "Servers", "server"),
-        (Page::Wardrobe, "Wardrobe", "user"),
+        (Page::Wardrobe, "Skins", "user"),
         (Page::Shop, "Shop", "bag"),
         (Page::Versions, "Versions", "archive"),
         (Page::Settings, "Settings", "sliders"),
@@ -159,7 +160,8 @@ impl Page {
     fn in_top_bar(wardrobe: bool) -> impl Iterator<Item = (Page, &'static str, &'static str)> {
         Self::ALL.into_iter().filter(move |(page, ..)| match page {
             Page::Settings => false,
-            Page::Wardrobe | Page::Shop => wardrobe,
+            Page::Wardrobe => true,
+            Page::Shop => false,
             _ => true,
         })
     }
@@ -316,6 +318,10 @@ struct Launcher {
     menu_closed_at: Option<Point<Pixels>>,
     /// The Wardrobe page's account and outfit (`wardrobe_page.rs`).
     wardrobe: Option<wardrobe_page::Wardrobe>,
+    /// The selected Minecraft skin arm style and upload result.
+    skin_slim: bool,
+    skin_uploading: bool,
+    skin_status: Option<String>,
     /// Name tag styles' marks; they outlive the account's `wardrobe`.
     wardrobe_marks: wardrobe_page::Marks,
     /// Ask the service again on the next draw of the Wardrobe (set by each visit).
@@ -640,6 +646,9 @@ impl Launcher {
             look: horizon_theme::glass::Glass::default_look(),
             menu_closed_at: None,
             wardrobe: None,
+            skin_slim: false,
+            skin_uploading: false,
+            skin_status: None,
             wardrobe_marks: Default::default(),
             wardrobe_reload: false,
             shop: Default::default(),
@@ -786,7 +795,7 @@ impl Launcher {
         this.fetch_startup_releases();
         this.mods_auto_update();
         this.fetch_links();
-        this.watch_shop(cx);
+        // Valtic shows the Minecraft skin editor rather than the old cosmetic shop.
         if home::getting_ready_preview() {
             this.preparing = true;
             this.play_when_prepared = this.selected().cloned();
@@ -1262,6 +1271,9 @@ impl Launcher {
                             self.client_error = Some(e);
                         }
                         self.accounts = Accounts::load();
+                        // An explicitly chosen server, world or friend takes priority.
+                        let joining_friend = self.joining.is_some();
+                        let launching_pack = self.starting_pack.is_some();
                         // A pack's Play button plays that pack; Play plays the selected instance.
                         let (profile, run) = match self.starting_pack.take() {
                             Some(work) => {
@@ -1290,6 +1302,8 @@ impl Launcher {
                         }
                         if let Some((flag, value)) = self.quick_play.take() {
                             cmd.arg(flag).arg(value);
+                        } else if !joining_friend && !launching_pack && !self.links.official_server.is_empty() {
+                            cmd.arg("--server").arg(&self.links.official_server);
                         }
                         backend::append_game_args(&mut cmd);
                         // Last, around every argument: the instance's pre-launch command,
@@ -1820,7 +1834,8 @@ impl Launcher {
                 .quick_play
                 .take()
                 .filter(|(flag, _)| *flag == "--server")
-                .map(|(_, ip)| ip);
+                .map(|(_, ip)| ip)
+                .or_else(|| (!self.links.official_server.is_empty()).then(|| self.links.official_server.clone()));
             if self.client.is_some() || self.starting_client.is_some() {
                 return;
             }
@@ -2949,7 +2964,14 @@ impl Launcher {
             .flex_col()
             .gap(px(2.))
             .child(heading(tr("INSTANCES").into()).child(add))
-            .children(items);
+            .children(items)
+            .children(self.instances.list.is_empty().then(|| {
+                button("create-first-instance", "+ Create Instance", Kind::Primary, &t)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.open_instance_dialog(None);
+                        cx.notify();
+                    }))
+            }));
         let servers: Vec<_> = self
             .servers
             .sidebar_list()
@@ -3135,14 +3157,6 @@ impl Launcher {
             }
             foot = foot.child(side);
         }
-        if !self.links.sponsor.is_empty() {
-            foot = foot.child(link(
-                "sponsor",
-                tr("Sponsor"),
-                "heart",
-                self.links.sponsor.clone(),
-            ));
-        }
         if !self.links.discord.is_empty() {
             foot = foot.child(link(
                 "discord",
@@ -3154,7 +3168,7 @@ impl Launcher {
         if !self.links.website.is_empty() {
             foot = foot.child(link(
                 "website",
-                tr("Website"),
+                tr("Our Website"),
                 "globe",
                 self.links.website.clone(),
             ));
@@ -3336,6 +3350,37 @@ impl Launcher {
 
     fn play_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
+        if self.selected_instance().is_none() {
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(24.))
+                .pt(px(40.))
+                .child(page_header(
+                    "Welcome to Valtic",
+                    "Create an instance, pick a Valtic build, and play with community mods.",
+                    &t,
+                ))
+                .child(div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap(px(18.))
+                    .p(px(28.))
+                    .rounded(px(18.))
+                    .bg(t.plate_soft)
+                    .child(shell::text(theme::night::TITLE, t.ink).child("Your adventure starts here"))
+                    .child(shell::text(theme::night::UI, t.ink_soft)
+                        .child("No instance yet. Create one to choose your Minecraft version. ValticSMP is the default server."))
+                    .child(
+                        button("welcome-create-instance", "+ Create Instance", Kind::Primary, &t)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.open_instance_dialog(None);
+                                cx.notify();
+                            })),
+                    ),
+                );
+        }
         // A Java instance plays Mojang's game: no Horizon version, nothing of Horizon's to prepare.
         let java = self.selected_instance().and_then(|i| i.java.clone());
         let Some(tag) = self
@@ -5281,7 +5326,7 @@ impl Render for Launcher {
             Page::Versions => self.versions_page(cx),
             Page::Mods => self.mods_page(cx),
             Page::Servers => self.servers_page(cx),
-            Page::Wardrobe => self.wardrobe_page(cx),
+            Page::Wardrobe => self.skins_page(cx),
             Page::Shop => self.shop_page(cx),
             Page::Settings => self.settings_page(cx),
         };

@@ -84,6 +84,14 @@ impl Instances {
 impl Launcher {
     pub(super) fn reload_instances(&mut self) {
         self.instances.list = instances::list();
+        // Hide an empty inherited default profile on a fresh install.
+        // Keep older instances with saved worlds or settings intact.
+        self.instances.list.retain(|i| {
+            i.kind != instances::Kind::Default
+                || ["saves", "options.txt", "horizon-player.txt"]
+                    .iter()
+                    .any(|item| i.home.join(item).exists())
+        });
         // A picture may have come or gone with the change.
         self.instances
             .icons
@@ -238,7 +246,7 @@ impl Launcher {
                         summary.map_or_else(|| tr("Modpack").into(), |p| p.summary()),
                     )
                 }
-                InstanceKind::Pack => (false, tr("From Horizon's registry").into()),
+                InstanceKind::Pack => (false, tr("From the Valtic mod registry").into()),
             };
             // Java instances have nothing of Horizon's to prepare: no state square.
             let state = (matches!(i.kind, InstanceKind::Default | InstanceKind::Own)

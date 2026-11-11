@@ -179,8 +179,7 @@ impl Launcher {
             .flex()
             .items_center()
             .gap(px(4.))
-            .child(tab("Rust Edition", horizon, !java))
-            .child(tab("Java Edition", java_icon, java))
+            .child(tab("Valtic Edition", horizon, !java))
     }
 
     /// An edition tab's click: the instance of that edition (`java`) played last, or, with none,
@@ -592,9 +591,7 @@ impl Launcher {
         let label = self.selected().map_or_else(
             || tr("No version").into(),
             |tag| {
-                horizon_launcher::nightly::label(tag)
-                    .or_else(|| build_import::label(tag))
-                    .unwrap_or_else(|| tag.clone())
+                format!("Minecraft {}", backend::game_version(tag))
             },
         );
         let open = self.picker.open;

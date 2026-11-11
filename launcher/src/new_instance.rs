@@ -126,7 +126,7 @@ impl Launcher {
             _ => None,
         };
         let base = match j.kind {
-            NewKind::Horizon => tr("My Horizon").to_string(),
+            NewKind::Horizon => tr("My Valtic").to_string(),
             _ => j.default_name(&j.minecraft(versions)?),
         };
         let taken: Vec<&str> = self
