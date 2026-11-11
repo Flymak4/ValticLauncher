@@ -27,8 +27,9 @@ jobs:
       RUSTFLAGS: -C target-feature=+crt-static
       # Register your OWN Microsoft public client app ID to enable sign-in.
       # Microsoft Entra public client ID (not a secret).
-      VALTIC_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID }}
-      HORIZON_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID }}
+      # Valtic's public Microsoft application ID (no client secret). Allow overriding via Actions.
+      VALTIC_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID || '5cc9c47c-7e6e-4012-9ef3-b73b06d73e7a' }}
+      HORIZON_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID || '5cc9c47c-7e6e-4012-9ef3-b73b06d73e7a' }}
       HORIZON_TELEMETRY_URL: "off"
     steps:
       - name: Check out Valtic source
