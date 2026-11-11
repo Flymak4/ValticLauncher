@@ -31,6 +31,12 @@ jobs:
       VALTIC_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID || '5cc9c47c-7e6e-4012-9ef3-b73b06d73e7a' }}
       HORIZON_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID || '5cc9c47c-7e6e-4012-9ef3-b73b06d73e7a' }}
       HORIZON_TELEMETRY_URL: "off"
+      # Each successful build receives a monotonically increasing launcher version.
+      HORIZON_LAUNCHER_VERSION: 0.2.${{ github.run_number }}
+      HORIZON_LAUNCHER_TAG: launcher@0.2.${{ github.run_number }}
+      VALTIC_OFFICIAL_BUILD: "1"
+      # Set this variable to a separate PUBLIC releases repo if the source stays private.
+      VALTIC_UPDATE_REPO: ${{ vars.VALTIC_UPDATE_REPO || github.repository }}
     steps:
       - name: Check out Valtic source
         uses: actions/checkout@v4
@@ -97,6 +103,14 @@ jobs:
           if ($zip.Length -eq 0) { throw 'The Windows download ZIP is empty.' }
           Write-Host "Created $($zip.Name) ($([math]::Round($zip.Length / 1MB, 2)) MiB)"
 
+          # The in-app updater requires the executable to have this exact name.
+          New-Item -ItemType Directory -Path 'publish-update' -Force | Out-Null
+          Copy-Item $exe 'publish-update/valtic-launcher.exe'
+          Compress-Archive -Path 'publish-update/*' -DestinationPath 'dist/valtic-launcher-windows-x64.zip' -CompressionLevel Optimal -Force
+          if ((Get-Item 'dist/valtic-launcher-windows-x64.zip').Length -lt 1MB) {
+            throw 'In-app update archive looks incomplete.'
+          }
+
       - name: Upload Valtic Windows download
         id: upload
         uses: actions/upload-artifact@v4
@@ -121,6 +135,40 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Both artifact upload and fallback release failed.' }
           "### Valtic Launcher download" >> $env:GITHUB_STEP_SUMMARY
           "The Actions upload failed, so the ZIP is available from the [fallback GitHub release]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag)." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Publish Valtic launcher update
+        # Create the release ONLY after successfully building and verifying the Windows binary.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.VALTIC_RELEASE_TOKEN || github.token }}
+          HAS_PUBLIC_RELEASE_TOKEN: ${{ secrets.VALTIC_RELEASE_TOKEN != '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $destination = $env:VALTIC_UPDATE_REPO
+          $tag = $env:HORIZON_LAUNCHER_TAG
+          if ($destination -ne $env:GITHUB_REPOSITORY -and $env:HAS_PUBLIC_RELEASE_TOKEN -ne 'true') {
+            Write-Host "::warning::Public updater publishing requires VALTIC_RELEASE_TOKEN."
+            "### Valtic update feed is not published" >> $env:GITHUB_STEP_SUMMARY
+            "Set repository variable VALTIC_UPDATE_REPO to your public distribution repository, and secret VALTIC_RELEASE_TOKEN to a fine-grained token with contents write access to it." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          # A public distribution repository must already have a default branch.
+          # Target this build's SHA only when publishing into the source repo.
+          if ($destination -eq $env:GITHUB_REPOSITORY) {
+            $target = $env:GITHUB_SHA
+          } else {
+            $target = 'main'
+          }
+          gh release create $tag 'dist/valtic-launcher-windows-x64.zip' 'dist/Valtic-Launcher-Windows.zip' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Official Valtic Launcher update. Open the launcher and click Update & Restart to install. Existing settings, worlds and instances are preserved." --latest
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish launcher release $tag to $destination." }
+          "### In-app updater release" >> $env:GITHUB_STEP_SUMMARY
+          "Published $tag to [$destination](https://github.com/$destination/releases/tag/$tag)." >> $env:GITHUB_STEP_SUMMARY
+          $visibility = gh repo view $destination --json visibility --jq '.visibility'
+          if ($visibility -ne 'PUBLIC') {
+            Write-Host "::warning::The updater's release repository is PRIVATE. Players cannot check for updates until a PUBLIC distribution repository is configured."
+            "**Important:** This release repository is private. Players cannot auto-update until a public distribution repository is configured." >> $env:GITHUB_STEP_SUMMARY
+          }
 
       - name: Show successful artifact download link
         if: ${{ steps.upload.outcome == 'success' }}

@@ -1417,9 +1417,8 @@ impl Launcher {
                 Msg::Updates(Ok(updates)) => {
                     self.update_error = None;
                     self.updates = *updates;
-                    // Horizon game releases are still usable, but we intentionally ignore
-                    // Horizon Launcher self-updates. They would replace the Valtic app.
-                    self.updates.launcher = None;
+                    // Valtic releases are checked against their own distribution feed.
+                    // Never use the upstream project's launcher releases.
                     if self.settings.auto_install() {
                         self.install_update();
                     }
@@ -3074,14 +3073,14 @@ impl Launcher {
             }
             SelfUpdate::Ready(version) => {
                 foot = foot.child(
-                    update(tr("A new version is available").to_string())
+                    update("New Valtic Launcher update available".to_string())
                         .child(
                             shell::text(theme::night::UI, shell::c(n.ink_soft))
                                 .relative()
                                 .child(trf("Launcher {version}", &[("version", version)])),
                         )
                         .child(div().relative().flex().child(
-                            button("update-launcher", "Update", Kind::Primary, &t).on_click(
+                            button("update-launcher", "Update & Restart", Kind::Primary, &t).on_click(
                                 cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.apply_launcher_update(cx);
                                     cx.notify();
@@ -3094,7 +3093,7 @@ impl Launcher {
                 let why = self.launcher_update_help(error.as_deref());
                 let url = backend::download_page(&self.links.website);
                 foot = foot.child(
-                    update(tr("A new version is available").to_string())
+                    update("New Valtic Launcher update available".to_string())
                         .child(
                             shell::text(theme::night::UI, shell::c(n.ink_soft))
                                 .relative()
@@ -3944,7 +3943,7 @@ impl Launcher {
         };
         let launcher_action = match &self.self_update {
             SelfUpdate::Ready(_) => Some(
-                button("update-settings", "Update", Kind::Secondary, &t)
+                button("update-settings", "Update & Restart", Kind::Secondary, &t)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.apply_launcher_update(cx);
                         cx.notify();

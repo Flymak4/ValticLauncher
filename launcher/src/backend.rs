@@ -11,6 +11,15 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "horizon-rust/horizon";
+/// Public distribution repository for Valtic Windows launcher updates. This is
+/// deliberately separate from REPO, which still provides the upstream game builds.
+/// The build workflow injects the distribution repository; it must be PUBLIC for players.
+pub const VALTIC_UPDATE_REPO: &str = match option_env!("VALTIC_UPDATE_REPO") {
+    Some(repo) if !repo.is_empty() => repo,
+    _ => "Flymak4/ValticLauncher",
+};
+pub const VALTIC_UPDATE_ASSET: &str = "valtic-launcher-windows-x64.zip";
+
 pub const README_URL: &str = "https://github.com/horizon-rust/horizon/blob/main/launcher/README.md";
 /// The players' page on connecting an AI agent (the website's docs/agents.md).
 pub const AGENT_DOCS_URL: &str = "https://playhorizon.dev/docs/agents";
@@ -481,7 +490,7 @@ pub const LAUNCHER_APPIMAGE_ASSET: Option<&str> = Some("horizon-launcher-linux-x
 pub const LAUNCHER_APPIMAGE_ASSET: Option<&str> = None;
 
 const LAUNCHER_BINARY: &str = if cfg!(windows) {
-    "horizon-launcher.exe"
+    "valtic-launcher.exe"
 } else {
     "horizon-launcher"
 };
@@ -815,6 +824,23 @@ fn launcher_releases_in_with(
         }
     }
     found
+}
+
+/// Valtic launcher releases must come from our own distribution repository,
+/// never from the unrelated upstream game's launcher releases.
+fn valtic_launcher_releases() -> Result<Vec<Release>, String> {
+    if !cfg!(windows) {
+        return Ok(Vec::new());
+    }
+    let url = format!(
+        "https://api.github.com/repos/{VALTIC_UPDATE_REPO}/releases?per_page=10"
+    );
+    let releases = crate::github::json(&url)?;
+    Ok(parse_releases(
+        &releases,
+        Some(VALTIC_UPDATE_ASSET),
+        is_launcher_tag,
+    ))
 }
 
 /// The launcher tags in GitHub's matching-refs answer, newest first.
@@ -3359,7 +3385,14 @@ fn launcher_update_from(releases: &[Release], own: &str) -> Option<Release> {
 pub fn releases_and_updates(
     on_releases: impl FnOnce(Result<Vec<Release>, String>),
 ) -> Result<Updates, String> {
-    releases_and_updates_with(release_list, installed, launcher_releases_in, on_releases)
+    // Keep using upstream for the game and mod builds, but only our own
+    // Valtic releases for replacing the installed Valtic Launcher.
+    releases_and_updates_with(
+        release_list,
+        installed,
+        |_| valtic_launcher_releases().unwrap_or_default(),
+        on_releases,
+    )
 }
 
 fn releases_and_updates_with(
@@ -3532,7 +3565,11 @@ pub fn update_target() -> PathBuf {
 /// The launcher archive this build installs from: the AppImage's when it runs from one (a `.tar.gz`
 /// binary would be written inside the read-only mount), this platform's otherwise.
 pub fn launcher_asset() -> Option<&'static str> {
-    launcher_asset_running_from(appimage_path().is_some())
+    if cfg!(windows) {
+        Some(VALTIC_UPDATE_ASSET)
+    } else {
+        None
+    }
 }
 
 fn launcher_asset_running_from(appimage: bool) -> Option<&'static str> {
@@ -3543,11 +3580,12 @@ fn launcher_asset_running_from(appimage: bool) -> Option<&'static str> {
     }
 }
 
-/// Development builds and `HORIZON_LAUNCHER_NO_SELF_UPDATE` never replace themselves.
+/// Only published Valtic Windows builds may replace themselves. Source builds
+/// and locally modified copies remain safe from unexpected updates.
 pub fn self_update_allowed() -> bool {
-    // Valtic is independently branded. Horizon's upstream launcher releases must
-    // never replace this executable. Enable updates only after Valtic signs its own.
-    false
+    cfg!(windows)
+        && option_env!("VALTIC_OFFICIAL_BUILD") == Some("1")
+        && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
 }
 
 /// The version in `horizon-launcher --version`'s output (`horizon-launcher 0.1.5`).
@@ -3930,6 +3968,37 @@ pub(crate) fn already_in_place(installed: Option<&str>, tag: &str) -> bool {
     }
 }
 
+/// SHA-256 declared by GitHub for the exact Valtic release asset.
+fn valtic_release_digest(release: &Release) -> Result<String, String> {
+    if !is_launcher_tag(&release.tag) || !self_update_allowed() {
+        return Err("This is not an official Valtic launcher update.".into());
+    }
+    let expected = release.asset.as_ref().ok_or("This release has no Windows updater.")?;
+    let url = format!(
+        "https://api.github.com/repos/{VALTIC_UPDATE_REPO}/releases/tags/{}",
+        release.tag
+    );
+    let data = crate::github::json(&url)?;
+    let asset = data["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|asset| {
+            asset["name"].as_str() == Some(VALTIC_UPDATE_ASSET)
+                && asset["browser_download_url"].as_str() == Some(expected.0.as_str())
+                && asset["size"].as_u64() == Some(expected.1)
+        })
+        .ok_or("The Valtic release asset has changed since the update check.")?;
+    let digest = asset["digest"]
+        .as_str()
+        .and_then(|s| s.strip_prefix("sha256:"))
+        .ok_or("This Valtic release has no GitHub SHA-256 digest. Update refused.")?;
+    if digest.len() != 64 || !digest.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err("GitHub returned an invalid update checksum. Update refused.".into());
+    }
+    Ok(digest.to_ascii_lowercase())
+}
+
 /// Downloads a launcher release and puts it in place of this one. The running process keeps
 /// working; `restart` starts the new one. When the file there already is that release or
 /// a newer one (updated from the command line or another window), there is nothing to do.
@@ -3959,7 +4028,11 @@ pub fn stage_update(release: &Release, progress: impl Fn(f32)) -> Result<Option<
     {
         return Ok(None);
     }
-    let sha256 = signed_digest(&release.tag, launcher_asset().unwrap_or_default())?;
+    // GitHub publishes a SHA-256 digest for each release asset. Obtain it
+    // independently from the official releases API, check the exact tag,
+    // download URL, size and filename, then verify downloaded bytes twice.
+    // Never apply Horizon's upstream signing keys to a Valtic release.
+    let sha256 = valtic_release_digest(release)?;
     let work = update_work_dir();
     remove_abandoned_stages(&work, std::time::SystemTime::now(), process_alive);
     let stage = new_stage_folder(&work)?;
