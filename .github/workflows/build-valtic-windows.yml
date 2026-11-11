@@ -92,6 +92,10 @@ jobs:
 
           New-Item -ItemType Directory -Path publish -Force | Out-Null
           Copy-Item $exe 'publish/Valtic Launcher.exe'
+          # Run this once to install into the user's Programs folder, so future
+          # updates can replace the launcher safely without another download.
+          # installer.rs recognises its special executable name.
+          Copy-Item $exe 'publish/valtic-launcher-setup.exe'
           Copy-Item LICENSE 'publish/LICENSE.txt'
           Copy-Item THIRD_PARTY_NOTICES.md 'publish/THIRD_PARTY_NOTICES.md'
           Copy-Item MICROSOFT_SIGN_IN.md 'publish/MICROSOFT_SIGN_IN.md'
@@ -175,4 +179,4 @@ jobs:
         shell: pwsh
         run: |
           "### Valtic Launcher download" >> $env:GITHUB_STEP_SUMMARY
-          "Download the ZIP from [this run's Artifacts section]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID)." >> $env:GITHUB_STEP_SUMMARY
+          "Download the ZIP from [this run's Artifacts section]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID). Use valtic-launcher-setup.exe for a permanent installation that can update itself." >> $env:GITHUB_STEP_SUMMARY
