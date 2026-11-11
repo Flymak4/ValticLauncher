@@ -42,16 +42,18 @@ jobs:
         with:
           workspaces: launcher
 
-      - name: Validate Microsoft sign-in configuration
+      - name: Check Microsoft sign-in configuration
         shell: pwsh
         run: |
           $clientId = $env:VALTIC_MSA_CLIENT_ID
           $parsed = [guid]::Empty
           if ([string]::IsNullOrWhiteSpace($clientId) -or -not [guid]::TryParse($clientId, [ref]$parsed) -or $parsed -eq [guid]::Empty) {
-            Write-Host "::error::Set VALTIC_MSA_CLIENT_ID in GitHub repository Actions variables. See MICROSOFT_SIGN_IN.md. Refusing to publish a launcher with disabled Microsoft sign-in."
-            exit 1
+            Write-Host "::warning::VALTIC_MSA_CLIENT_ID is missing or invalid. The Windows app will compile, but Microsoft sign-in will be unavailable until a registered public client ID is configured and the launcher is rebuilt."
+            "### Microsoft sign-in is not configured" >> $env:GITHUB_STEP_SUMMARY
+            "This build can open but cannot sign in or launch Minecraft. Set the Actions variable `VALTIC_MSA_CLIENT_ID` to your registered Microsoft public client app ID and build again. See MICROSOFT_SIGN_IN.md." >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Host 'Microsoft public client ID is configured.'
           }
-          Write-Host 'Microsoft public client ID is present.'
 
       - name: Compile Valtic Launcher
         working-directory: launcher
