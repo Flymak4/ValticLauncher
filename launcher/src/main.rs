@@ -157,7 +157,7 @@ impl Page {
 
     /// The pages the top bar shows: all but Settings, and the Wardrobe and the Shop only when
     /// `wardrobe` (`Launcher::wardrobe_shown`).
-    fn in_top_bar(wardrobe: bool) -> impl Iterator<Item = (Page, &'static str, &'static str)> {
+    fn in_top_bar(_wardrobe: bool) -> impl Iterator<Item = (Page, &'static str, &'static str)> {
         Self::ALL.into_iter().filter(move |(page, ..)| match page {
             Page::Settings => false,
             Page::Wardrobe => true,

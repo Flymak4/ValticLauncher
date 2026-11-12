@@ -7,7 +7,7 @@ use crate::glass_ui::{self as ui, white, Tone};
 use crate::instances_page::java_line;
 use gpui::{anchored, canvas, deferred, point};
 use horizon_launcher::instances::{Icon, Instance, Kind as InstanceKind};
-use horizon_theme::glass::{fill, ink, radius};
+use horizon_theme::glass::{ink, radius};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;

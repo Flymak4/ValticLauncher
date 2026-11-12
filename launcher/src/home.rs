@@ -131,7 +131,7 @@ impl Launcher {
                 .child(div().size(px(6.)).bg(c(n.accent_hi)))
                 .child(trf(
                     "{version} available",
-                    &[("version", update_name(release))],
+                    &[("version", &update_name(release))],
                 ));
             hero = hero.child(match installing {
                 Some((_, p)) => line

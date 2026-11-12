@@ -57,7 +57,6 @@ fn badge(tone: Tone, label: &str) -> Div {
 /// to recognize at a glance.
 fn nightly_card_text(release: &Release) -> Option<(String, String)> {
     release.nightly.as_ref()?;
-    let date = published(&release.date, "");
     let title = format!("Valtic {}", backend::game_version(&release.tag));
     let commit = horizon_launcher::nightly::label(&release.tag)
         .and_then(|label| {

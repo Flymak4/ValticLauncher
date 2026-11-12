@@ -181,7 +181,6 @@ impl Launcher {
     /// chosen when it is made, so the other tab goes to an instance of that edition
     /// ([`Self::switch_edition`]).
     fn edition_tabs(&mut self, java: bool, cx: &mut Context<Self>) -> Div {
-        let grass = self.grass_mark(18.);
         let horizon = self.horizon_mark(18.);
         let tab = |label: &'static str, icon: AnyElement, open: bool| {
             let d = div()
@@ -211,14 +210,6 @@ impl Launcher {
                         cx.notify();
                     }))
             }
-        };
-        let java_icon = match grass {
-            Some(image) => gpui::img(image)
-                .flex_none()
-                .size(px(18.))
-                .rounded(px(5.))
-                .into_any_element(),
-            None => div().into_any_element(),
         };
         div()
             .flex()
