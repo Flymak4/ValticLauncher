@@ -2,7 +2,7 @@
 //! Scenes are read from the *selected version's* official game panoramas.
 //! No generated or unrelated version artwork is used.
 use super::*;
-use crate::glass_ui::{self as ui, white};
+use crate::glass_ui::{self as ui};
 use horizon_theme::glass::{ink, radius};
 use std::sync::Arc;
 
@@ -76,7 +76,7 @@ impl Launcher {
         // Include the scene in the executable: it must survive distribution as
         // a standalone Windows .exe, not just work in the GitHub build folder.
         let art = self.icon_image(
-            "valtic:cherry-scene".to_string(), 1500., false,
+            "valtic:cherry-scene-v2".to_string(), 1800., false,
             || Some(include_bytes!("../assets/valtic/cherry_grove.jpg").to_vec()),
         );
         let custom_art = if art.is_none() {
@@ -89,12 +89,12 @@ impl Launcher {
         } else { None };
         let art = art.or(custom_art).or(panorama);
 
-        let banner_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("assets/valtic/cherry_banner.png");
+        // Always embed the actual Valtic voxel banner, including in standalone .exe builds.
         let banner = self.icon_image(
-            "valtic:cherry-banner".to_string(), 860., false,
-            || std::fs::read(&banner_path).ok(),
+            "valtic:cherry-banner-v2".to_string(), 900., false,
+            || Some(include_bytes!("../assets/valtic/cherry_banner.webp").to_vec()),
         );
+        let no_banner = banner.is_none();
         let picker = java.is_none().then(|| self.glass_picker(cx));
         let scene = div()
             .absolute().top_0().left_0().size_full()
@@ -110,8 +110,8 @@ impl Launcher {
             .child(div().absolute().top_0().left_0().size_full()
                 .bg(gpui::linear_gradient(
                     90.,
-                    gpui::linear_color_stop(ui::color(0x1b101f).opacity(0.76), 0.),
-                    gpui::linear_color_stop(ui::color(0x1b101f).opacity(0.81), 1.),
+                    gpui::linear_color_stop(ui::color(0x201024).opacity(0.20), 0.),
+                    gpui::linear_color_stop(ui::color(0x190e1d).opacity(0.53), 1.),
                 )))
             .child(div().absolute().bottom_0().left_0().w_full().h(px(135.))
                 .bg(gpui::linear_gradient(
@@ -177,21 +177,23 @@ impl Launcher {
         let title = div().flex().flex_col().items_center().gap(px(10.))
             .children(banner.map(|p| {
                 gpui::img(p)
-                    .w(px(if compact { 300. } else { 510. }))
-                    .h(px(if compact { 100. } else { 170. }))
+                    .w(px(if compact { 360. } else { 590. }))
+                    .h(px(if compact { 120. } else { 190. }))
                     .object_fit(gpui::ObjectFit::Contain)
             }))
-            .when(!banner_path.exists(), |d| d.child(
-                ui::text(if compact { 59. } else { 84. },
+            .when(no_banner, |d| d.child(
+                ui::text(if compact { 56. } else { 74. },
                     FontWeight::BOLD, ink::FULL)
                     .font_family(theme::DISPLAY_FONT)
                     .child("VALTIC"),
             ))
-            .child(ui::text(12., FontWeight::BOLD, ink::FULL)
-                .child("✿  YOUR NEXT ADVENTURE IS BLOOMING  ✿"))
-            .child(ui::text(18., FontWeight::MEDIUM, ink::FULL)
+            .child(ui::text(32., FontWeight::BOLD, ink::FULL)
+                .font_family(theme::DISPLAY_FONT)
                 .text_center()
-                .child("Your Minecraft world. Your way."));
+                .child("Welcome to Valtic"))
+            .child(ui::text(16., FontWeight::MEDIUM, ink::FULL)
+                .text_center()
+                .child("Your Minecraft experience, built for Valtic SMP."));
 
         let details = div()
             .flex().flex_wrap().items_center().justify_center()
@@ -208,10 +210,10 @@ impl Launcher {
                     }))
             }));
 
-        let hero_height = if compact { 475. } else { 550. };
+        let hero_height = if compact { 535. } else { 610. };
         let hero = div()
             .relative().w_full().min_h(px(hero_height))
-            .rounded(px(20.)).overflow_hidden()
+            .rounded(px(14.)).overflow_hidden()
             .bg(ui::color(0x2d1c33))
             .child(scene).child(petals)
             .child(div().relative().flex().flex_col()
@@ -234,7 +236,22 @@ impl Launcher {
         url: &'static str,
         hue: u32,
     ) -> AnyElement {
-        let picture = self.valtic_scene(tag, picture_index, 580.);
+        // Every card has a real image even before Minecraft has been downloaded.
+        let bundled = match picture_index {
+            1 => self.icon_image(
+                "valtic:grove-news-1".to_string(), 640., false,
+                || Some(include_bytes!("../assets/valtic/news_1.jpg").to_vec()),
+            ),
+            2 => self.icon_image(
+                "valtic:grove-news-2".to_string(), 640., false,
+                || Some(include_bytes!("../assets/valtic/news_2.jpg").to_vec()),
+            ),
+            _ => self.icon_image(
+                "valtic:grove-news-3".to_string(), 640., false,
+                || Some(include_bytes!("../assets/valtic/news_3.jpg").to_vec()),
+            ),
+        };
+        let picture = bundled.or_else(|| self.valtic_scene(tag, picture_index, 580.));
         let missing_picture = picture.is_none();
         div()
             .id(SharedString::from(format!("valtic-story-{picture_index}")))
@@ -308,7 +325,6 @@ impl Launcher {
         let version = self.selected_instance()
             .and_then(|i| i.java.as_ref().map(|j| j.minecraft.clone()))
             .unwrap_or_else(|| backend::game_version(&tag));
-        let current_263 = version == "26.3";
         let notes_url = if current_263 { RELEASE_NOTES_263 } else { MINECRAFT_UPDATES };
         // Use official news destinations instead of invented release stories.
         let stories = div().flex().flex_wrap().gap(px(14.))
@@ -339,13 +355,13 @@ impl Launcher {
                 .child(div()
                     .flex().flex_col().gap(px(4.))
                     .child(ui::text(23., FontWeight::BOLD, ink::FULL)
-                        .child("Stories from the Grove"))
+                        .child("Latest News"))
                     .child(ui::text(13., FontWeight::NORMAL, ink::BODY)
                         .child(format!(
                             "The latest highlights for Minecraft {version}"
                         ))))
                 .child(ui::text(12., FontWeight::SEMIBOLD, ink::STRONG)
-                    .child("OFFICIAL MINECRAFT NEWS")))
+                    .child("MINECRAFT NEWS & UPDATES")))
             .child(stories)
             .child(div()
                 .id("valtic-all-notes")
