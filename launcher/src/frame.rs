@@ -290,27 +290,24 @@ impl Launcher {
             this.open_instance_dialog(None);
             cx.notify();
         }));
+        // Render the bundled Valtic emblem, never a generic placeholder "V".
+        let emblem = self.icon_image(
+            "valtic:cherry-emblem-v2".to_string(), 192., false,
+            || Some(include_bytes!("../assets/valtic/cherry_emblem.webp").to_vec()),
+        );
         let brand = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(12.))
-            .px(px(18.))
-            .pt(px(26.))
-            .pb(px(30.))
-            .child(div()
-                .flex().items_center().justify_center()
-                .size(px(44.)).rounded(px(13.))
-                .bg(gpui::linear_gradient(
-                    135.,
-                    gpui::linear_color_stop(ui::color(0xe87caf), 0.),
-                    gpui::linear_color_stop(ui::color(0x8d4778), 1.),
-                ))
-                .child(ui::text(29., FontWeight::BOLD, ink::FULL).child("V")))
-            .child(div().flex().flex_col().gap(px(2.))
-                .child(ui::text(22., FontWeight::BOLD, ink::FULL).child("Valtic"))
-                .child(ui::text(11., FontWeight::MEDIUM, ink::NOTE)
-                    .child("CHERRY GROVE")));
+            .flex().flex_col().flex_none().items_center()
+            .gap(px(4.)).px(px(14.)).pt(px(24.)).pb(px(25.))
+            .children(emblem.map(|p| {
+                gpui::img(p)
+                    .size(px(115.))
+                    .object_fit(gpui::ObjectFit::Contain)
+            }))
+            .child(ui::text(25., FontWeight::BOLD, ink::FULL)
+                .font_family(crate::theme::DISPLAY_FONT)
+                .child("Valtic"))
+            .child(ui::text(13., FontWeight::MEDIUM, ink::NOTE)
+                .child("Launcher"));
         // Real sidebar navigation: the controls open Horizon's existing pages.
         let mut primary_nav = div()
             .flex()
@@ -637,7 +634,35 @@ impl Launcher {
                 self.links.website.clone(),
             ));
         }
-        foot = foot.child(links).child(
+        // Keep the Microsoft account reachable without filling the top bar.
+        let (account_name, account_status) = self.who_plays();
+        let signed_in = self.accounts.selected().is_some();
+        let account_face = self.accounts.selected().map(|a| a.uuid.clone());
+        let account_card = div()
+            .id("valtic-sidebar-account")
+            .flex().items_center().gap(px(10.))
+            .px(px(10.)).py(px(11.)).mt(px(12.))
+            .rounded(px(13.))
+            .border_1().border_color(ui::color(0xf6accf).opacity(0.21))
+            .bg(ui::color(0x322033).opacity(0.89))
+            .hover(|d| d.bg(ui::color(0x53304c)))
+            .cursor_pointer()
+            .child(div().size(px(34.)).rounded(px(7.)).overflow_hidden()
+                .child(self.profile_heads.draw(account_face.as_deref(), 34., self.scale, &t)))
+            .child(div().flex().flex_col().gap(px(3.)).min_w_0()
+                .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
+                    .truncate().child(account_name))
+                .child(ui::text(11., FontWeight::NORMAL, ink::NOTE)
+                    .truncate().child(account_status)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if signed_in {
+                    this.go(Page::Settings);
+                } else {
+                    this.start_sign_in();
+                }
+                cx.notify();
+            }));
+        foot = foot.child(links).child(account_card).child(
             ui::text(12., FontWeight::NORMAL, ink::DIM)
                 .id("launcher-version")
                 .px(px(8.))
@@ -821,7 +846,7 @@ impl Launcher {
             .gap(px(12.))
             .px(px(32.))
             .pt(px(14.))
-            .child(strip)
+            .children((self.page != Page::Play).then_some(strip))
             .children(self.toast_in_topbar())
             .child(
                 div()
