@@ -14,7 +14,7 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/build-valtic-windows.yml'
 
-# Required only for the fallback prerelease download if artifact uploads fail.
+# Release one directly downloadable setup EXE; keep the internal update archive for auto-updates.
 permissions:
   contents: write
 
@@ -97,7 +97,7 @@ jobs:
         working-directory: launcher
         run: cargo build --release --locked --bin valtic-launcher
 
-      - name: Verify executable and prepare download ZIP
+      - name: Verify Windows executable and prepare one-click installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -121,24 +121,17 @@ jobs:
           }
           Write-Host "Verified $($binary.Name) ($([math]::Round($binary.Length / 1MB, 2)) MiB)"
 
+          # A single directly downloadable EXE: its filename activates the built-in
+          # setup wizard, which installs the launcher and supports future updates.
+          # Do not package a player download ZIP or an outer folder.
           New-Item -ItemType Directory -Path publish -Force | Out-Null
-          Copy-Item $exe 'publish/Valtic Launcher.exe'
-          # Run this once to install into the user's Programs folder, so future
-          # updates can replace the launcher safely without another download.
-          # installer.rs recognises its special executable name.
           Copy-Item $exe 'publish/valtic-launcher-setup.exe'
-          # Plain EXEs are uploaded directly as GitHub release assets (no unzip step).
-          Copy-Item LICENSE 'publish/LICENSE.txt'
-          Copy-Item THIRD_PARTY_NOTICES.md 'publish/THIRD_PARTY_NOTICES.md'
-          Copy-Item MICROSOFT_SIGN_IN.md 'publish/MICROSOFT_SIGN_IN.md'
+          if ((Get-Item 'publish/valtic-launcher-setup.exe').Length -lt 1MB) {
+            throw 'Standalone Valtic Launcher setup EXE looks incomplete.'
+          }
 
-          # Never call a plain executable "setup": it is not an installer.
+          # Internal-only archive for the in-app updater, NOT the player download.
           New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Compress-Archive -Path 'publish/*' -DestinationPath 'dist/Valtic-Launcher-Windows.zip' -CompressionLevel Optimal -Force
-          $zip = Get-Item 'dist/Valtic-Launcher-Windows.zip'
-          if ($zip.Length -eq 0) { throw 'The Windows download ZIP is empty.' }
-          Write-Host "Created $($zip.Name) ($([math]::Round($zip.Length / 1MB, 2)) MiB)"
-
           # The in-app updater requires the executable to have this exact name.
           New-Item -ItemType Directory -Path 'publish-update' -Force | Out-Null
           Copy-Item $exe 'publish-update/valtic-launcher.exe'
@@ -146,31 +139,6 @@ jobs:
           if ((Get-Item 'dist/valtic-launcher-windows-x64.zip').Length -lt 1MB) {
             throw 'In-app update archive looks incomplete.'
           }
-
-      - name: Upload Valtic Windows download
-        id: upload
-        uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        continue-on-error: true
-        with:
-          name: Valtic-Launcher-Windows-${{ github.run_number }}-${{ github.run_attempt }}
-          path: dist/Valtic-Launcher-Windows.zip
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-
-      - name: Create fallback GitHub release if upload fails
-        if: ${{ github.event_name == 'push' && steps.upload.outcome == 'failure' }}
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = "build-${{ github.run_number }}-${{ github.run_attempt }}"
-          gh release create $tag 'dist/Valtic-Launcher-Windows.zip' --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "Valtic Launcher build #${{ github.run_number }} (fallback download)" --notes "Automatic fallback download because the GitHub Actions artifact service failed." --prerelease
-          if ($LASTEXITCODE -ne 0) { throw 'Both artifact upload and fallback release failed.' }
-          "### Valtic Launcher download" >> $env:GITHUB_STEP_SUMMARY
-          "The Actions upload failed, so the ZIP is available from the [fallback GitHub release]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag)." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Publish Valtic launcher update
         if: ${{ github.event_name == 'push' }}
@@ -197,11 +165,13 @@ jobs:
           } else {
             $target = 'main'
           }
-          # Publish direct EXEs for ordinary players; keep the ZIP only for the in-app updater.
-          # The setup EXE is the existing per-user installer (no extraction or admin required).
-          gh release create $tag 'publish/valtic-launcher-setup.exe' 'publish/Valtic Launcher.exe' 'dist/valtic-launcher-windows-x64.zip' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. No ZIP extraction is needed. For a portable launch, use Valtic Launcher.exe instead. Existing settings, worlds and instances are preserved. The ZIP is only for the automatic in-app updater." --latest
+          # Exactly one player-facing download: the setup EXE.
+          # The ZIP is required internally by the already-shipped in-app updater.
+          gh release create $tag 'publish/valtic-launcher-setup.exe' 'dist/valtic-launcher-windows-x64.zip' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. This is a direct Windows EXE download, with no ZIP or folder extraction. Existing settings, worlds and instances are preserved. The separate ZIP asset is used only by the automatic in-app updater." --latest
           if ($LASTEXITCODE -ne 0) { throw "Could not publish launcher release $tag to $destination." }
-          "### In-app updater release" >> $env:GITHUB_STEP_SUMMARY
+          "### Download Valtic Launcher (single EXE)" >> $env:GITHUB_STEP_SUMMARY
+          $exeUrl = "https://github.com/$destination/releases/download/$([uri]::EscapeDataString($tag))/valtic-launcher-setup.exe"
+          "[**Download Valtic Launcher for Windows (.exe)**]($exeUrl) — just open the EXE; no folders or ZIPs to extract." >> $env:GITHUB_STEP_SUMMARY
           "Published $tag to [$destination](https://github.com/$destination/releases/tag/$tag)." >> $env:GITHUB_STEP_SUMMARY
           $visibility = gh repo view $destination --json visibility --jq '.visibility'
           if ($visibility -ne 'PUBLIC') {
@@ -209,9 +179,3 @@ jobs:
             "**Important:** This release repository is private. Players cannot auto-update until a public distribution repository is configured." >> $env:GITHUB_STEP_SUMMARY
           }
 
-      - name: Show successful artifact download link
-        if: ${{ steps.upload.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          "### Valtic Launcher download" >> $env:GITHUB_STEP_SUMMARY
-          "Download the ZIP from [this run's Artifacts section]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID). Use valtic-launcher-setup.exe for a permanent installation that can update itself." >> $env:GITHUB_STEP_SUMMARY
