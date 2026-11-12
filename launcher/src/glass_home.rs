@@ -173,7 +173,6 @@ impl Launcher {
             );
         }
         div()
-            .id("valtic-library-glass")
             .flex().flex_col().gap(px(15.))
             .w_full().max_w(px(860.))
             .p(px(19.))

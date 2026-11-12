@@ -242,7 +242,7 @@ impl Launcher {
             .child(div().flex().items_center().flex_wrap().gap(px(15.))
                 .child(ui::text(18., FontWeight::BOLD, ink::FULL)
                     .child("Latest Minecraft News"))
-                .child(div().ml_auto().cursor_pointer()
+                .child(div().id("valtic-minecraft-news-all").ml_auto().cursor_pointer()
                     .px(px(13.)).py(px(9.))
                     .rounded(px(11.))
                     .bg(ui::color(0x66344f).opacity(0.92))
