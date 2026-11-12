@@ -415,9 +415,9 @@ impl Launcher {
             .items_center()
             .flex_none()
             .w(px(if self.window_width >= WIDE {
-                200.
+                290.
             } else {
-                160.
+                245.
             }))
             .h(px(TALL))
             .overflow_hidden()
@@ -646,9 +646,9 @@ impl Launcher {
                 .h(px(TALL))
                 .flex_none()
                 .min_w(px(if self.window_width >= WIDE {
-                    220.
+                    305.
                 } else {
-                    170.
+                    250.
                 }))
                 .px(px(16.))
                 .rounded(px(radius::LARGE))
