@@ -78,7 +78,13 @@ jobs:
           if not source.exists():
               raise SystemExit("Missing Valtic cherry emblem")
           emblem = Image.open(source).convert("RGBA")
-          emblem.thumbnail((242, 242), Image.Resampling.LANCZOS)
+          # Remove transparent padding so the emblem fills the Windows taskbar tile.
+          alpha = emblem.getchannel("A")
+          bounds = alpha.point(lambda value: 255 if value >= 16 else 0).getbbox()
+          if bounds is None:
+              raise SystemExit("Valtic emblem is fully transparent")
+          emblem = emblem.crop(bounds)
+          emblem.thumbnail((256, 256), Image.Resampling.LANCZOS)
           square = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
           square.alpha_composite(emblem, ((256 - emblem.width) // 2, (256 - emblem.height) // 2))
           dest = Path("packaging/icons/valtic.ico")
