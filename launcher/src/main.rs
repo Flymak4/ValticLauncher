@@ -5588,14 +5588,19 @@ impl Render for Launcher {
             "valtic:chrome-logo-v4".to_string(), 220., false,
             || Some(include_bytes!("../assets/valtic/cherry_emblem.webp").to_vec()),
         );
+        // Resolve images before borrowing the opening view's focus handle.
+        let opening_background = if self.opening.is_some() {
+            self.icon_image(
+                "valtic:splash-cherry-background-v4".to_string(), 1500., false,
+                || Some(include_bytes!("../assets/valtic/cherry_grove.jpg").to_vec()),
+            )
+        } else {
+            None
+        };
         if let Some(opening) = &self.opening {
             // The wordmark arrives letter by letter, then gives way to the launcher; a click or
             // a key skips ahead.
             let gone = 1. - ease_out_cubic(reveal / 0.6);
-            let opening_background = self.icon_image(
-                "valtic:splash-cherry-background-v4".to_string(), 1500., false,
-                || Some(include_bytes!("../assets/valtic/cherry_grove.jpg").to_vec()),
-            );
             let word = opening_screen::render(
                 held, gone, chrome_logo.clone(), opening_background,
             );
