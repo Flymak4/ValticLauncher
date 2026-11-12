@@ -5298,7 +5298,7 @@ impl Render for Launcher {
                 .flex_col()
                 .size_full()
                 .bg(t.side)
-                .children(titlebar::render(&t, window, chrome_logo))
+                .children(titlebar::render(&t, window, None))
                 .child(specimen::render(&t));
         }
         if std::mem::take(&mut self.restyle) {
@@ -5645,7 +5645,7 @@ impl Render for Launcher {
             .size_full()
             .bg(t.side)
             .child(sky)
-            .children(titlebar::render(&t, window))
+            .children(titlebar::render(&t, window, chrome_logo))
             .children(self.settings_save_notice(cx))
             .child(root.flex_1().min_h_0())
             .children(titlebar::resize_handles(window))
