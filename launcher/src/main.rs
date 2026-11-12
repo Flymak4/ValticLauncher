@@ -5371,22 +5371,31 @@ impl Render for Launcher {
         // the blocky looks keep the baked sky. The sky is tiles that don't depend on the
         // window's size, so a resize costs no rebake.
         glass::begin_build(window);
+        // The hero is an embedded high-resolution Minecraft-style Cherry Grove
+        // scene. Unlike the previous placeholder, it renders on first launch
+        // and requires no external image file next to the distributed executable.
+        let valtic_background = if t.glass && t.dark && self.page == Page::Play {
+            self.icon_image(
+                "valtic:full-cherry-grove-v3".to_string(), 1800., false,
+                || Some(include_bytes!("../assets/valtic/cherry_grove.jpg").to_vec()),
+            )
+        } else { None };
         let sky = if t.glass && t.dark {
-            // Full-window artwork, including behind the top bar and the story cards.
             div()
                 .absolute().top_0().left_0().size_full()
                 .bg(gpui::rgb(0x1d1421))
+                .children(valtic_background.map(|picture| {
+                    gpui::img(picture)
+                        .absolute().top_0().left_0().size_full()
+                        .object_fit(gpui::ObjectFit::Cover)
+                }))
                 .when(self.page == Page::Play, |d| {
                     d.child(
-                        gpui::svg().path("valtic/cherry-scene.svg")
-                            .absolute().top_0().left_0().size_full()
-                    )
-                    .child(
                         div().absolute().top_0().left_0().size_full()
                             .bg(gpui::linear_gradient(
                                 90.,
-                                gpui::linear_color_stop(gpui::rgb(0x1b1020).opacity(0.42), 0.),
-                                gpui::linear_color_stop(gpui::rgb(0x1b1020).opacity(0.77), 1.),
+                                gpui::linear_color_stop(gpui::rgb(0x1b1020).opacity(0.18), 0.),
+                                gpui::linear_color_stop(gpui::rgb(0x1b1020).opacity(0.58), 1.),
                             ))
                     )
                 })
