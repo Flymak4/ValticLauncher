@@ -24,6 +24,15 @@ impl gpui::AssetSource for Assets {
             "valtic/cherry-emblem.svg" => return Ok(Some(Cow::Borrowed(
                 include_bytes!("../assets/valtic/cherry-emblem.svg").as_slice(),
             ))),
+            "valtic/news-forest.svg" => return Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/valtic/news-forest.svg").as_slice(),
+            ))),
+            "valtic/news-camp.svg" => return Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/valtic/news-camp.svg").as_slice(),
+            ))),
+            "valtic/news-cherry.svg" => return Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/valtic/news-cherry.svg").as_slice(),
+            ))),
             _ => {}
         }
         if let Some(name) = path
