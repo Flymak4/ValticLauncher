@@ -5298,7 +5298,7 @@ impl Render for Launcher {
                 .flex_col()
                 .size_full()
                 .bg(t.side)
-                .children(titlebar::render(&t, window))
+                .children(titlebar::render(&t, window, chrome_logo))
                 .child(specimen::render(&t));
         }
         if std::mem::take(&mut self.restyle) {
@@ -5582,11 +5582,23 @@ impl Render for Launcher {
         if self.asking_owner() {
             root = root.child(self.owner_screen(cx));
         }
+        // Load the exact bundled emblem once for the native title bar and
+        // the cherry blossom startup animation. No external files are needed.
+        let chrome_logo = self.icon_image(
+            "valtic:chrome-logo-v4".to_string(), 220., false,
+            || Some(include_bytes!("../assets/valtic/cherry_emblem.webp").to_vec()),
+        );
         if let Some(opening) = &self.opening {
             // The wordmark arrives letter by letter, then gives way to the launcher; a click or
             // a key skips ahead.
             let gone = 1. - ease_out_cubic(reveal / 0.6);
-            let word = opening_screen::render(held, gone);
+            let opening_background = self.icon_image(
+                "valtic:splash-cherry-background-v4".to_string(), 1500., false,
+                || Some(include_bytes!("../assets/valtic/cherry_grove.jpg").to_vec()),
+            );
+            let word = opening_screen::render(
+                held, gone, chrome_logo.clone(), opening_background,
+            );
             root = root.child(
                 div()
                     .id("opening")
