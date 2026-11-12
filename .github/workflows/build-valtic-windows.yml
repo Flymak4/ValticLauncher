@@ -78,20 +78,46 @@ jobs:
           if not source.exists():
               raise SystemExit("Missing Valtic cherry emblem")
           emblem = Image.open(source).convert("RGBA")
-          # Trim even faint shadow/transparent halos before scaling the visible
-          # Valtic mark to almost the entire Windows taskbar icon canvas.
+          # Windows scales the entire ICO canvas, not just its visible artwork.
+          # Trim the cherry emblem's transparent halo AND any flat dark matte
+          # baked into the source so the logo is legible at taskbar sizes.
+          from PIL import ImageChops
           alpha = emblem.getchannel("A")
-          bounds = alpha.point(lambda value: 255 if value >= 72 else 0).getbbox()
+          corners = [emblem.getpixel((x, y)) for x, y in [
+              (0, 0), (emblem.width - 1, 0),
+              (0, emblem.height - 1), (emblem.width - 1, emblem.height - 1)
+          ]]
+          matte = tuple(sorted(p[c] for p in corners)[len(corners)//2] for c in range(3))
+          rgb = emblem.convert("RGB")
+          difference = ImageChops.difference(rgb, Image.new("RGB", emblem.size, matte))
+          contrast = difference.convert("L").point(lambda v: 255 if v >= 30 else 0)
+          visible = alpha.point(lambda v: 255 if v >= 60 else 0)
+          from PIL import ImageChops as Chops
+          # Only strip a solid matte when it is shared by the corners; this
+          # leaves already-transparent source artwork intact.
+          corner_spread = max(
+              abs(p[c] - matte[c]) for p in corners for c in range(3)
+          )
+          if corner_spread < 24 and min(p[3] for p in corners) > 200:
+              visible = Chops.multiply(visible, contrast)
+              # Turn the removed matte transparent rather than retaining a box.
+              emblem.putalpha(Chops.multiply(alpha, contrast))
+          bounds = visible.getbbox()
           if bounds is None:
-              raise SystemExit("Valtic emblem is fully transparent")
+              bounds = alpha.getbbox()
+          if bounds is None:
+              raise SystemExit("Valtic emblem has no visible pixels")
           emblem = emblem.crop(bounds)
-          emblem.thumbnail((250, 250), Image.Resampling.LANCZOS)
+          # Fill 94% of the icon, allowing just enough space for antialiasing.
+          emblem.thumbnail((240, 240), Image.Resampling.LANCZOS)
           square = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
           square.alpha_composite(emblem, ((256 - emblem.width) // 2, (256 - emblem.height) // 2))
           dest = Path("packaging/icons/valtic.ico")
-          # Cover Windows 11 taskbar DPI scaling as well as Explorer/Start.
+          # Each size is rendered from the clean master; Windows picks the
+          # correct bitmap for 100%-300% display scaling.
           sizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256]
           square.save(dest, format="ICO", sizes=[(n, n) for n in sizes])
+          print(f"Visible emblem bounds: {bounds}; generated {len(sizes)} ICO sizes")
           print(f"Embedded Valtic icon: {dest} ({dest.stat().st_size} bytes)")
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Could not generate the Valtic app icon' }
