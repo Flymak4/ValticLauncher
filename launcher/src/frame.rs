@@ -282,10 +282,10 @@ impl Launcher {
             .pt(px(22.));
 
         for (page, label, symbol) in [
-            (Page::Play, "Home", "home"),
-            (Page::Mods, "Mods", "package"),
-            (Page::Versions, "Versions", "archive"),
-            (Page::Servers, "Servers", "server"),
+            (Page::Play, "Home", "dashboard-square-01"),
+            (Page::Mods, "Mods", "puzzle"),
+            (Page::Versions, "Versions", "download-04"),
+            (Page::Servers, "Servers", "computer-terminal-01"),
         ] {
             let active = self.page == page;
             nav = nav.child(
@@ -391,7 +391,7 @@ impl Launcher {
             .child(ui::icon("arrow-down-01", 17., white(ink::SOFT)))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 if this.accounts.selected().is_none() {
-                    this.start_sign_in();
+                    this.sign_in_to_play();
                 } else {
                     this.go(Page::Settings);
                 }
@@ -539,7 +539,7 @@ impl Launcher {
                             .child(tr("Sign in with Microsoft")),
                     )
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.start_sign_in();
+                        this.sign_in_to_play();
                         cx.notify();
                     })),
                 &t,
