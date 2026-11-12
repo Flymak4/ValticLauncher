@@ -325,7 +325,7 @@ impl Launcher {
         let version = self.selected_instance()
             .and_then(|i| i.java.as_ref().map(|j| j.minecraft.clone()))
             .unwrap_or_else(|| backend::game_version(&tag));
-        let notes_url = if current_263 { RELEASE_NOTES_263 } else { MINECRAFT_UPDATES };
+        let notes_url = if version == "26.3" { RELEASE_NOTES_263 } else { MINECRAFT_UPDATES };
         // Use official news destinations instead of invented release stories.
         let stories = div().flex().flex_wrap().gap(px(14.))
             .child(self.valtic_feature_card(
