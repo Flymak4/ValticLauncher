@@ -433,177 +433,163 @@ impl Launcher {
 
     /// The glass top bar: the pages in a glass strip, then the player, Microsoft sign-in and
     /// Settings (`px-8 pt-3.5`).
+    /// Valtic's cherry-grove top navigation: no permanent left rail.
+    /// Buttons keep the existing native page, account and update actions.
     pub(super) fn glass_topbar(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        // Valtic keeps all navigation in the left rail, like Modrinth's app.
-        // The top bar tells the player where they are instead of duplicating tabs.
-        let compact = self.window_width < crate::glass_home::COMPACT;
-        let page_title = match self.page {
-            Page::Play => "Home",
-            Page::Mods => "Mods",
-            Page::Servers => "Servers",
-            Page::Versions => "Versions",
-            Page::Wardrobe => "Skins",
-            Page::Shop => "Shop",
-            Page::Settings => "Settings",
-        };
-        let strip = div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .gap(px(3.))
-            .child(ui::text(11., FontWeight::SEMIBOLD, ink::DIM).child("VALTIC"))
-            .child(ui::text(20., FontWeight::BOLD, ink::FULL).child(page_title));
+        let compact = self.window_width < 1030.;
+        let mut nav = div()
+            .flex().flex_wrap().items_center()
+            .gap(px(4.)).px(px(6.)).py(px(5.))
+            .rounded(px(27.))
+            .border_1().border_color(ui::color(0xf4a1c6).opacity(0.29))
+            .bg(ui::color(0x241427).opacity(0.93));
 
-        let (name, how) = self.who_plays();
-        let face = self.accounts.selected().map(|a| a.uuid.clone());
-        let open = self.account_menu;
-        let chip =
-            div()
-                .id("account")
-                .relative()
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .h(px(44.))
-                .pl(px(8.))
-                .pr(px(12.))
-                .rounded(px(radius::ROW))
-                .bg(white(if open { fill::ACTIVE } else { fill::ROW_HOVER }))
-                .when(!open, |d| d.hover(|s| s.bg(white(0.09))))
-                .cursor_pointer()
-                .child(
-                    div().size(px(26.)).rounded(px(7.)).overflow_hidden().child(
-                        self.profile_heads
-                            .draw(face.as_deref(), 26., self.scale, &t),
-                    ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .max_w(px(if compact { 100. } else { 150. }))
-                        .child(
-                            ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
-                                .line_height(px(17.))
-                                .truncate()
-                                .child(name),
-                        )
-                        .children((!compact).then(|| {
-                            ui::text(12., FontWeight::NORMAL, ink::QUIET)
-                                .line_height(px(15.))
-                                .child(how)
-                        })),
-                )
-                .child(
-                    ui::icon("arrow-down-01", 16., white(ink::FAINT))
-                        .ml(px(4.))
-                        .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                            if open { std::f32::consts::PI } else { 0. },
-                        ))),
-                )
-                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                    if this.closed_by_this_press(event) {
-                        return;
-                    }
-                    this.account_menu = !this.account_menu;
-                    if this.account_menu {
-                        this.accounts = Accounts::load();
-                        this.load_profile_heads();
-                    }
-                    cx.notify();
-                }));
-        let account = div()
-            .relative()
-            .child(keyboard(chip, &t))
-            .children(self.glass_account_menu(cx));
-
-        // Signing in with Microsoft, while nobody is: the mockup's button.
-        let sign_in = self.accounts.selected().is_none().then(|| {
-            keyboard(
+        for (page, label, symbol) in [
+            (Page::Play, "Home", "dashboard-square-01"),
+            (Page::Mods, "Mods", "puzzle"),
+            (Page::Versions, "Versions", "download-04"),
+            (Page::Servers, "Servers", "computer-terminal-01"),
+            (Page::Wardrobe, "Skins", "user"),
+            (Page::Settings, "Settings", "sliders-horizontal"),
+        ] {
+            if page == Page::Wardrobe && !self.wardrobe_shown() {
+                continue;
+            }
+            let selected = self.page == page;
+            nav = nav.child(
                 div()
-                    .id("topbar-sign-in")
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .h(px(44.))
-                    .px(px(16.))
-                    .rounded(px(radius::ROW))
-                    .bg(white(fill::BUTTON))
-                    .hover(|s| s.bg(white(fill::BUTTON_HOVER)))
+                    .id(SharedString::from(format!("valtic-top-{label}")))
+                    .flex().items_center().justify_center()
+                    .gap(px(8.)).h(px(39.))
+                    .px(px(if compact { 10. } else { 15. }))
+                    .rounded(px(22.))
+                    .border_1()
+                    .border_color(if selected {
+                        ui::color(0xffb4da).opacity(0.82)
+                    } else {
+                        ui::color(0xffb4da).opacity(0.)
+                    })
+                    .bg(if selected {
+                        ui::color(0xf498c6)
+                    } else {
+                        ui::color(0x241427).opacity(0.)
+                    })
+                    .hover(|d| d.bg(ui::color(0xa34d7f)))
                     .cursor_pointer()
-                    .child(microsoft::logo(16.))
-                    .child(
-                        ui::text(14., FontWeight::MEDIUM, ink::FULL)
-                            .child(tr("Sign in with Microsoft")),
-                    )
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.sign_in_to_play();
+                    .child(ui::icon(symbol, 17., if selected {
+                        ui::color(0x261323)
+                    } else {
+                        gpui::white()
+                    }))
+                    .child(ui::text(13., FontWeight::SEMIBOLD, if selected {
+                        ui::color(0x261323)
+                    } else {
+                        ink::FULL
+                    }).child(label))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.go(page);
                         cx.notify();
                     })),
-                &t,
-            )
-        });
-        let settings = ui::icon_button(
-            "nav-Settings",
-            "sliders-horizontal",
-            40.,
-            19.,
-            radius::CONTROL,
-            self.page == Page::Settings,
-            &t,
-        )
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.go(if this.page == Page::Settings {
-                Page::Play
+            );
+        }
+
+        let logo = div()
+            .flex().flex_col().flex_none().justify_center()
+            .gap(px(0.)).mr(px(13.))
+            .child(ui::text(23., FontWeight::BOLD, ink::FULL)
+                .font_family(theme::DISPLAY_FONT)
+                .child("VALTIC"))
+            .child(ui::text(9., FontWeight::SEMIBOLD, ink::STRONG)
+                .child("L A U N C H E R"));
+
+        let ready_update = matches!(self.self_update, SelfUpdate::Ready(_));
+        let update = div()
+            .id("valtic-top-update")
+            .flex().flex_none().items_center().justify_center()
+            .gap(px(7.)).h(px(43.)).px(px(15.))
+            .rounded(px(25.))
+            .bg(if ready_update { ui::color(0xffd7e9) }
+                else { ui::color(0x392439).opacity(0.92) })
+            .border_1().border_color(ui::color(0xf5a0ce).opacity(0.58))
+            .hover(|d| d.bg(ui::color(0xf4a4c8)))
+            .cursor_pointer()
+            .child(ui::icon("download-04", 17., if ready_update {
+                ui::color(0x2d172c)
             } else {
-                Page::Settings
-            });
-            cx.notify();
-        }));
-        // The last native build's log (not in the mockup, kept), as a quiet button.
-        let build_log = self.native_log.available.then(|| {
-            keyboard(
-                div()
-                    .id("topbar-native-log")
-                    .flex()
-                    .items_center()
-                    .h(px(36.))
-                    .px(px(14.))
-                    .rounded(px(radius::CONTROL))
-                    .bg(white(fill::BUTTON))
-                    .hover(|s| s.bg(white(fill::BUTTON_HOVER)))
-                    .cursor_pointer()
-                    .child(ui::text(14., FontWeight::MEDIUM, ink::FULL).child(tr("Build log")))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.native_log_open();
-                        cx.notify();
-                    })),
-                &t,
-            )
-        });
+                gpui::white()
+            }))
+            .child(ui::text(13., FontWeight::SEMIBOLD, if ready_update {
+                ui::color(0x2d172c)
+            } else {
+                ink::FULL
+            }).child(if ready_update { "Update now" } else { "Updates" }))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                if matches!(this.self_update, SelfUpdate::Ready(_)) {
+                    this.apply_launcher_update(cx);
+                } else {
+                    this.go(Page::Settings);
+                }
+                cx.notify();
+            }));
+
+        let signed_in = self.accounts.selected().is_some();
+        let account = if signed_in {
+            let (name, _) = self.who_plays();
+            let face = self.accounts.selected().map(|a| a.uuid.clone());
+            div()
+                .id("valtic-top-account")
+                .flex().items_center().gap(px(9.))
+                .h(px(43.)).px(px(12.))
+                .rounded(px(23.))
+                .border_1().border_color(ui::color(0xf4b5d3).opacity(0.35))
+                .bg(ui::color(0x28162c).opacity(0.94))
+                .cursor_pointer()
+                .hover(|d| d.bg(ui::color(0x623452)))
+                .child(
+                    div().size(px(27.)).rounded(px(7.)).overflow_hidden()
+                        .child(self.profile_heads.draw(
+                            face.as_deref(), 27., self.scale, &t
+                        ))
+                )
+                .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
+                    .truncate().child(name))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.account_menu = !this.account_menu;
+                    cx.notify();
+                }))
+        } else {
+            div()
+                .id("valtic-top-microsoft")
+                .flex().items_center().gap(px(9.))
+                .h(px(43.)).px(px(15.))
+                .rounded(px(23.))
+                .border_1().border_color(ui::color(0xf4b5d3).opacity(0.35))
+                .bg(ui::color(0x28162c).opacity(0.94))
+                .hover(|d| d.bg(ui::color(0x623452)))
+                .cursor_pointer()
+                .child(microsoft::logo(17.))
+                .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
+                    .child("Sign in with Microsoft"))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.sign_in_to_play();
+                    cx.notify();
+                }))
+        };
+
         div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(12.))
-            .px(px(32.))
-            .pt(px(14.))
-            .children((self.page != Page::Play).then_some(strip))
+            .flex().flex_none().items_center().flex_wrap()
+            .gap(px(10.))
+            .px(px(if compact { 16. } else { 25. }))
+            .pt(px(12.)).pb(px(9.))
+            .child(logo)
+            .child(nav)
             .children(self.toast_in_topbar())
-            .child(
-                div()
-                    .ml_auto()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(6.))
-                    .children(build_log)
-                    .children(self.accounts.selected().is_some().then_some(account))
-                    .children(sign_in)
-                    .child(settings),
-            )
+            .child(div().ml_auto().flex().items_center()
+                .gap(px(9.)).child(update)
+                .child(div().relative()
+                    .child(account)
+                    .children(self.glass_account_menu(cx))))
     }
 
     /// The menu under the player (`Switch player`): everyone who can play, then Manage accounts.

@@ -61,37 +61,33 @@ impl Launcher {
 
     /// Valtic's own scenic launchpad. The native backend still owns Play,
     /// version switching, Microsoft login and instance editing.
+    /// Screenshot-inspired Valtic homepage. The logo is a bundled Valtic
+    /// SVG, while Play, the version picker, and links remain live native controls.
     pub(super) fn valtic_home_head(
         &mut self, tag: &str, prepared: bool, cx: &mut Context<Self>,
     ) -> Div {
-        let instance = self.selected_instance().cloned();
-        let java = instance.as_ref()
+        let java = self.selected_instance()
             .and_then(|i| i.java.as_ref().map(|j| j.minecraft.clone()));
-        let version = java.clone().unwrap_or_else(|| backend::game_version(tag));
         let ready = prepared || java.is_some();
         let compact = self.window_width < 1050.;
-        let name = instance.as_ref()
-            .map(|i| i.name.clone()).unwrap_or_else(|| "My Valtic".to_string());
 
-        // Small live blossom petals float over the hero. The scenery itself is
-        // drawn across the entire window by main.rs.
         let mut petals = div().absolute().top_0().left_0().size_full();
         for (i, (x, y, size)) in [
-            (0.06, 19., 10.), (0.23, 68., 7.), (0.41, -15., 10.),
-            (0.63, 27., 8.), (0.88, 54., 13.), (0.96, 196., 9.),
-            (0.15, 288., 8.), (0.72, 342., 12.), (0.31, 399., 7.),
+            (0.06, 39., 10.), (0.22, 112., 7.), (0.43, -18., 9.),
+            (0.68, 49., 8.), (0.90, 78., 12.),
+            (0.12, 275., 8.), (0.76, 355., 12.),
         ].into_iter().enumerate() {
             let petal = div().absolute().left(gpui::relative(x)).top(px(y))
                 .w(px(size * 1.4)).h(px(size * 0.8))
                 .rounded(px(size / 2.))
-                .bg(ui::color(if i % 3 == 0 { 0xffdfe9 } else { 0xf6adcf })
-                    .opacity(0.72));
+                .bg(ui::color(if i % 3 == 0 { 0xffe3ed } else { 0xf6a5c9 })
+                    .opacity(0.70));
             if motion::still() || self.settings.performance() {
                 petals = petals.child(petal);
             } else {
                 let drift = if i % 2 == 0 { 0.07 } else { -0.06 };
                 petals = petals.child(petal.with_animation(
-                    gpui::ElementId::named_usize("valtic-falling-petal-v2", i),
+                    gpui::ElementId::named_usize("valtic-hero-petal", i),
                     gpui::Animation::new(
                         std::time::Duration::from_secs(11 + (i % 7) as u64)
                     ).repeat(),
@@ -101,97 +97,68 @@ impl Launcher {
             }
         }
 
-        let play = div()
-            .flex().flex_wrap().items_center().justify_center()
-            .gap(px(16.)).mt(px(21.))
+        let play = div().flex().flex_wrap().items_center().justify_center()
+            .gap(px(16.)).mt(px(33.))
             .child(self.play_group(tag, ready, cx))
             .children(java.is_none().then(|| self.glass_picker(cx)));
 
-        // These buttons remain real actions, not decorative placeholders.
         let mut links = div().flex().flex_wrap()
             .items_center().justify_center()
-            .gap(px(12.)).mt(px(23.));
+            .gap(px(15.)).mt(px(22.));
         for (id, title, symbol, url) in [
-            ("blossom-discord", "Discord", "discord", self.links.discord.clone()),
-            ("blossom-website", "Website", "globe-02", self.links.website.clone()),
+            ("valtic-hero-discord", "Discord", "discord", self.links.discord.clone()),
+            ("valtic-hero-website", "Website", "globe-02", self.links.website.clone()),
         ] {
             if url.is_empty() { continue; }
             links = links.child(
                 div().id(id)
                     .flex().items_center().justify_center()
-                    .gap(px(8.)).h(px(46.)).min_w(px(108.))
-                    .px(px(16.))
-                    .rounded(px(13.))
+                    .gap(px(9.)).h(px(48.)).min_w(px(170.))
+                    .px(px(18.))
+                    .rounded(px(19.))
                     .border_1()
-                    .border_color(ui::color(0xffb7d7).opacity(0.33))
-                    .bg(ui::color(0x3b263b).opacity(0.86))
-                    .hover(|d| d.bg(ui::color(0x71425f).opacity(0.95)))
+                    .border_color(ui::color(0xffb8d5).opacity(0.48))
+                    .bg(ui::color(0x2c182f).opacity(0.88))
+                    .hover(|d| d.bg(ui::color(0x754266).opacity(0.93)))
                     .cursor_pointer()
                     .child(ui::icon(symbol, 19., gpui::white()))
-                    .child(ui::text(14., FontWeight::SEMIBOLD, ink::FULL).child(title))
-                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                    .child(ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
+                        .child(title))
+                    .on_click(move |_, _, cx| cx.open_url(&url))
             );
         }
 
-        let status = div().flex().flex_wrap()
-            .items_center().justify_center().gap(px(14.)).mt(px(19.))
-            .child(ui::text(12., FontWeight::MEDIUM, ink::FULL)
-                .child(format!("●  {}  ·  Minecraft {version}",
-                    if ready { "Ready to play" } else { "First launch setup" })))
-            .child(ui::text(12., FontWeight::MEDIUM, ink::STRONG)
-                .child(name))
-            .children(instance.map(|i| {
-                ui::quiet("valtic-configure", "Configure  ↗", 32., &self.theme)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.open_instance_dialog(Some(i.clone()));
-                        cx.notify();
-                    }))
-            }));
-
-        let logo = self.icon_image(
-            "valtic:real-cherry-banner-v3".to_string(), 1000., false,
-            || Some(include_bytes!("../assets/valtic/cherry_banner.webp").to_vec()),
-        );
-        let logo_missing = logo.is_none();
-        let hero_height = if compact { 490. } else { 560. };
-        let hero = div().relative()
-            .w_full().min_h(px(hero_height))
+        div().relative().w_full()
+            .min_h(px(if compact { 535. } else { 690. }))
             .flex().flex_col().items_center().justify_center()
-            .px(px(if compact { 12. } else { 24. }))
-            .py(px(18.))
-            .child(
-                div().absolute().top_0().left_0().size_full()
-                    .bg(gpui::linear_gradient(
-                        90.,
-                        gpui::linear_color_stop(ui::color(0x2a1731).opacity(0.08), 0.),
-                        gpui::linear_color_stop(ui::color(0x251228).opacity(0.26), 1.),
-                    ))
-            )
+            .px(px(14.)).py(px(32.))
+            .child(div().absolute().top_0().left_0().size_full()
+                .bg(gpui::linear_gradient(
+                    90.,
+                    gpui::linear_color_stop(ui::color(0x241228).opacity(0.07), 0.),
+                    gpui::linear_color_stop(ui::color(0x1b0e22).opacity(0.37), 1.),
+                )))
             .child(petals)
             .child(div().relative()
                 .flex().flex_col().items_center().justify_center()
-                .children(logo.map(|picture| {
-                    gpui::img(picture)
-                        .w(px(if compact { 390. } else { 630. }))
-                        .h(px(if compact { 145. } else { 205. }))
-                        .object_fit(gpui::ObjectFit::Contain)
-                }))
-                .when(logo_missing, |d| d.child(
-                    gpui::svg().path("valtic/cherry-logo.svg")
-                        .w(px(if compact { 390. } else { 615. }))
-                        .h(px(if compact { 145. } else { 205. }))
-                ))
-                .child(ui::text(if compact { 29. } else { 39. },
-                        FontWeight::BOLD, ink::FULL)
+                // The existing custom SVG has Valtic's block lettering,
+                // torii roof and cherry blossoms, like the reference image.
+                .child(gpui::svg()
+                    .path("valtic/cherry-logo.svg")
+                    .w(px(if compact { 430. } else { 660. }))
+                    .h(px(if compact { 170. } else { 244. })))
+                .child(ui::text(if compact { 33. } else { 46. },
+                    FontWeight::NORMAL, ink::FULL)
                     .font_family(theme::DISPLAY_FONT)
                     .text_center()
+                    .mt(px(7.))
                     .child("Welcome to Valtic"))
-                .child(ui::text(16., FontWeight::NORMAL, ink::FULL)
-                    .mt(px(7.)).text_center()
-                    .child("Your Minecraft experience, built for Valtic SMP."))
-                .child(play).child(links).child(status));
-
-        div().flex().flex_col().child(hero)
+                .child(ui::text(if compact { 14. } else { 16. },
+                    FontWeight::NORMAL, ink::FULL)
+                    .mt(px(10.)).text_center()
+                    .child("Your Minecraft experience, built for speed."))
+                .child(play)
+                .child(links))
     }
 
     /// Rich discovery tiles use only panoramas taken from the selected build.
@@ -271,6 +238,8 @@ impl Launcher {
             .into_any_element()
     }
 
+    /// A slender news bar at the base of the grove, like the design reference.
+    /// The title opens Valtic's configured website; release notes stay accessible.
     pub(super) fn valtic_home_bottom(
         &mut self, rows: Div, cx: &mut Context<Self>,
     ) -> Div {
@@ -278,107 +247,54 @@ impl Launcher {
         let version = self.selected_instance()
             .and_then(|i| i.java.as_ref().map(|j| j.minecraft.clone()))
             .unwrap_or_else(|| backend::game_version(&tag));
-        let current_263 = version == "26.3";
-        let notes_url = if current_263 { RELEASE_NOTES_263 } else { MINECRAFT_UPDATES };
-        // Real Minecraft content only: the three news tiles correspond to
-        // documented 26.3 features, not invented Valtic announcements.
-        let stories = if current_263 {
-            div().flex().flex_wrap().gap(px(14.))
-                .child(self.valtic_feature_card(
-                    &tag, 1, "WILDERNESS BOUND", "The Dappled Forest",
-                    "Explore the new forest biome and the poplar wood set.",
-                    notes_url, 0x658d7d,
-                ))
-                .child(self.valtic_feature_card(
-                    &tag, 2, "EXPLORATION", "Abandoned Camps",
-                    "Follow explorer maps to hidden camps in the wild.",
-                    notes_url, 0x83638e,
-                ))
-                .child(self.valtic_feature_card(
-                    &tag, 3, "JAVA 26.3", "What's new?",
-                    "Cushions, straw beds, concrete stairs and more.",
-                    notes_url, 0x9d6483,
-                ))
+        let url = if self.links.website.is_empty() {
+            MINECRAFT_UPDATES.to_string()
         } else {
-            div().flex().flex_wrap().gap(px(14.))
-                .child(self.valtic_feature_card(
-                    &tag, 1, "OFFICIAL NEWS", "Minecraft updates",
-                    "Discover the latest official news and releases.",
-                    MINECRAFT_UPDATES, 0x86536f,
-                ))
-                .child(self.valtic_feature_card(
-                    &tag, 2, "JAVA EDITION", "Your next adventure",
-                    "Explore Minecraft worlds and discoveries.",
-                    MINECRAFT_UPDATES, 0x53766c,
-                ))
-                .child(self.valtic_feature_card(
-                    &tag, 3, "COMMUNITY", "More to explore",
-                    "Read news from the creators of Minecraft.",
-                    MINECRAFT_UPDATES, 0x6c638f,
-                ))
+            self.links.website.clone()
         };
         let news = div()
-            .flex()
-            .flex_col()
-            .gap(px(14.))
-            .pt(px(24.))
-            .child(div()
-                .flex()
-                .justify_between()
-                .items_center()
+            .id("valtic-news-strip")
+            .flex().items_center().flex_wrap()
+            .gap(px(17.)).min_h(px(76.))
+            .px(px(23.)).py(px(12.))
+            .rounded(px(21.))
+            .border_1().border_color(ui::color(0xf6a6d3).opacity(0.57))
+            .bg(ui::color(0x241426).opacity(0.94))
+            .child(ui::text(14., FontWeight::BOLD, ui::color(0xf69dca))
+                .child("LATEST NEWS"))
+            .child(div().w(px(1.)).h(px(27.))
+                .bg(ui::color(0xffa5d0).opacity(0.55)))
+            .child(ui::text(15., FontWeight::SEMIBOLD, ink::FULL)
+                .child("Valtic SMP — Christmas Update"))
+            .child(div().ml_auto().flex().items_center().gap(px(10.))
+                .child(ui::text(12., FontWeight::MEDIUM, ink::STRONG)
+                    .child(format!("Minecraft {version}")))
                 .child(div()
-                    .flex().flex_col().gap(px(4.))
-                    .child(ui::text(23., FontWeight::BOLD, ink::FULL)
-                        .child("Latest News"))
-                    .child(ui::text(13., FontWeight::NORMAL, ink::BODY)
-                        .child(format!(
-                            "The latest highlights for Minecraft {version}"
-                        ))))
-                .child(ui::text(12., FontWeight::SEMIBOLD, ink::STRONG)
-                    .child("OFFICIAL MINECRAFT NEWS")))
-            .child(stories)
-            .child(div()
-                .id("valtic-all-notes")
-                .flex()
-                .items_center()
-                .justify_between()
-                .px(px(20.))
-                .py(px(15.))
-                .rounded(px(12.))
-                .bg(ui::color(0x29212e))
-                .hover(|d| d.bg(ui::color(0x3b2c40)))
-                .cursor_pointer()
-                .child(ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
-                    .child(format!("Read the official Minecraft {version} release notes")))
-                .child(ui::text(16., FontWeight::BOLD, ink::FULL).child("↗"))
-                .on_click(move |_, _, cx| cx.open_url(notes_url)));
-
-        let mut shortcuts = div().flex().flex_wrap().gap(px(10.)).mt(px(22.));
-        for (label, tab) in [
-            ("Explore your worlds  ↗", home_tabs::HomeTab::Worlds),
-            ("Manage your mods  ↗", home_tabs::HomeTab::Mods),
-        ] {
-            shortcuts = shortcuts.child(
-                ui::quiet(format!("valtic-shortcut-{label}"), label, 40., &self.theme)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.home_tab = tab;
-                        cx.notify();
-                    }))
-            );
-        }
+                    .id("valtic-news-view")
+                    .flex().items_center().justify_center()
+                    .px(px(16.)).h(px(38.))
+                    .rounded(px(12.))
+                    .bg(ui::color(0x5e3855))
+                    .border_1()
+                    .border_color(ui::color(0xf6a6d3).opacity(0.36))
+                    .hover(|d| d.bg(ui::color(0x874d72)))
+                    .cursor_pointer()
+                    .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
+                        .child("View"))
+                    .on_click(move |_, _, cx| cx.open_url(&url))));
         let advanced = if self.home_tab == home_tabs::HomeTab::Overview {
             None
         } else {
             Some(self.glass_home_tabs(rows, cx))
         };
-        div()
-            .flex()
-            .flex_col()
+        div().flex().flex_col()
+            .gap(px(18.))
             .child(news)
-            .child(shortcuts)
+            // Libraries and advanced instance features remain accessible
+            // below the cinematic first screen, rather than getting removed.
             .child(self.glass_library(cx))
             .children(advanced)
-            .child(ui::text(11., FontWeight::NORMAL, ink::DIM).pt(px(20.))
+            .child(ui::text(11., FontWeight::NORMAL, ink::DIM)
                 .child("Valtic is an independent community launcher, not an official Mojang product."))
     }
 

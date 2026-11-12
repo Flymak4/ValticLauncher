@@ -1,5 +1,4 @@
-//! Horizon launcher: installs Horizon builds, prepares them from the player's own Minecraft,
-//! and starts the client or a dedicated server.
+//! Valtic Launcher: prepares and launches Minecraft with a custom cherry-grove interface.
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
@@ -5417,7 +5416,9 @@ impl Render for Launcher {
         let (topbar, sidebar) = if t.glass {
             (
                 self.glass_topbar(cx),
-                self.glass_sidebar(window, cx).into_any_element(),
+                // Valtic has a full-width top navigation; the legacy sidebar
+                // is intentionally not rendered in the cherry-grove look.
+                div().flex_none().w(px(0.)).h_full().into_any_element(),
             )
         } else {
             (self.topbar(cx), self.sidebar(window, cx).into_any_element())
