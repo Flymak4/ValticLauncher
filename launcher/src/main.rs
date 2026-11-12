@@ -5385,7 +5385,7 @@ impl Render for Launcher {
                 .top_0()
                 .left_0()
                 .size_full()
-                .bg(gpui::rgb(if self.page == Page::Play { 0x1c1220 } else { 0x14121b }))
+                .bg(gpui::rgb(if self.page == Page::Play { 0x251625 } else { 0x14121b }))
                 .children(grove.map(|scene| {
                     gpui::img(scene).absolute().top_0().left_0().size_full()
                         .object_fit(gpui::ObjectFit::Cover)
