@@ -565,7 +565,7 @@ impl Launcher {
             .gap(px(12.))
             .px(px(32.))
             .pt(px(14.))
-            .child(strip)
+            .children((self.page != Page::Play).then_some(strip))
             .children(self.toast_in_topbar())
             .child(
                 div()
