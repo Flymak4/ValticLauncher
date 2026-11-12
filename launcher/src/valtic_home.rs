@@ -80,6 +80,14 @@ impl Launcher {
         let panorama = self.valtic_scene(tag, 0, 1080.);
         let no_panorama = panorama.is_none();
         let grass = if no_panorama { self.grass_mark(176.) } else { None };
+        // The official Valtic cherry-blossom banner is loaded from the
+        // launcher's bundled assets when present; no generated replacement.
+        let banner_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/valtic/cherry_banner.png");
+        let valtic_banner = self.icon_image(
+            "valtic:cherry-banner".to_string(), 860., false,
+            || std::fs::read(&banner_path).ok(),
+        );
         let picker = (!java).then(|| self.glass_picker(cx));
         let edit = selected.clone();
 
@@ -156,10 +164,16 @@ impl Launcher {
                 .child(div().size(px(7.)).rounded_full().bg(ui::color(0xffb9d5)))
                 .child(ui::text(12., FontWeight::BOLD, ink::FULL)
                     .child("✿  A WORLD IN BLOOM")))
+            .children(valtic_banner.map(|banner| {
+                gpui::img(banner)
+                    .w(px(if compact { 340. } else { 560. }))
+                    .h(px(if compact { 116. } else { 188. }))
+                    .object_fit(gpui::ObjectFit::Contain)
+            }))
             .child(ui::text(49., FontWeight::BOLD, ink::FULL)
                 .line_height(px(54.))
                 .font_family(theme::DISPLAY_FONT)
-                .child("Valtic"))
+                .child(if banner_path.exists() { "" } else { "Valtic" }))
             .child(ui::text(19., FontWeight::SEMIBOLD, ink::FULL).child(
                 if current_263 { "Your next adventure is blooming" } else { "A new adventure is blooming" }
             ))
