@@ -5372,12 +5372,28 @@ impl Render for Launcher {
         // window's size, so a resize costs no rebake.
         glass::begin_build(window);
         let sky = if t.glass && t.dark {
+            // Continue the Cherry Grove outside Home's hero, behind the top bar
+            // and content. The dark veil keeps secondary pages and text readable.
+            let grove = (self.page == Page::Play).then(|| {
+                self.icon_image(
+                    "valtic:cherry-shell".to_string(), 1600., false,
+                    || Some(include_bytes!("../assets/valtic/cherry_grove.jpg").to_vec()),
+                )
+            }).flatten();
             div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .size_full()
                 .bg(gpui::rgb(if self.page == Page::Play { 0x1c1220 } else { 0x14121b }))
+                .children(grove.map(|scene| {
+                    gpui::img(scene).absolute().top_0().left_0().size_full()
+                        .object_fit(gpui::ObjectFit::Cover)
+                }))
+                .children((self.page == Page::Play).then(|| {
+                    div().absolute().top_0().left_0().size_full()
+                        .bg(gpui::rgb(0x211522).opacity(0.68))
+                }))
                 .into_any_element()
         } else {
             let (sky, next) = self.sky.render(
