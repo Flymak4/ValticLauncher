@@ -13,6 +13,28 @@ pub struct Assets;
 
 impl gpui::AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        // Bundled Valtic scenery and branding: available offline in the Windows EXE.
+        match path {
+            "valtic/cherry-scene.svg" => return Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/valtic/cherry-scene.svg").as_slice(),
+            ))),
+            "valtic/cherry-logo.svg" => return Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/valtic/cherry-logo.svg").as_slice(),
+            ))),
+            "valtic/cherry-emblem.svg" => return Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/valtic/cherry-emblem.svg").as_slice(),
+            ))),
+            "valtic/news-forest.svg" => return Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/valtic/news-forest.svg").as_slice(),
+            ))),
+            "valtic/news-camp.svg" => return Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/valtic/news-camp.svg").as_slice(),
+            ))),
+            "valtic/news-cherry.svg" => return Ok(Some(Cow::Borrowed(
+                include_bytes!("../assets/valtic/news-cherry.svg").as_slice(),
+            ))),
+            _ => {}
+        }
         if let Some(name) = path
             .strip_prefix("icons/glass/")
             .and_then(|p| p.strip_suffix(".svg"))

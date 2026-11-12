@@ -194,7 +194,8 @@ impl Theme {
             }
         };
         let none = gpui::transparent_black();
-        let look = Glass::new(accent.rgb(), TINT, BLUR);
+        // Valtic's visual identity stays cherry pink across its own screens.
+        let look = Glass::new(0xd75c97, TINT, BLUR);
         let look = if dark { look } else { light_look(look) };
         Self {
             plate_soft: white(fill::ROW_HOVER),
