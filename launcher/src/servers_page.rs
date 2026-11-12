@@ -1551,7 +1551,7 @@ impl Launcher {
             let result = (|| {
                 if servers::program().is_none() {
                     let tag =
-                        tag.ok_or_else(|| Problem::plain("Install a Horizon version first."))?;
+                        tag.ok_or_else(|| Problem::plain("Install a Valtic version first."))?;
                     servers::set_up(&tag).map_err(Problem::plain)?;
                 }
                 if !dir.join("server.toml").is_file() {
@@ -2469,7 +2469,7 @@ impl Launcher {
             return div().child(centered(
                 if self.older_horizon() {
                     tr(
-                        "This server's Horizon is too old to show its settings here. Update it on \
+                        "This server's Valtic build is too old to show its settings here. Update it on \
                      the Backups tab, then they appear.",
                     )
                 } else {
@@ -2820,11 +2820,11 @@ impl Launcher {
         });
         let about = match (&available, &check, &status.update_last) {
             (Some(tag), _, _) => trf(
-                "Update available: Horizon {tag} (this server runs {release}). Updating backs up \
+                "Update available: Valtic {tag} (this server runs {release}). Updating backs up \
                  the world first, and goes back by itself if the new version doesn't start.",
                 &[("tag", tag), ("release", &release)],
             ),
-            (None, Some(_), _) => trf("Up to date: Horizon {release}.", &[("release", &release)]),
+            (None, Some(_), _) => trf("Up to date: Valtic {release}.", &[("release", &release)]),
             (None, None, Some((last, _))) => format!("Valtic {release}. {last}"),
             (None, None, None) => format!("Valtic {release}."),
         };
@@ -2836,7 +2836,7 @@ impl Launcher {
                         this.servers.update = None;
                         if let Some(dir) = this.servers.open.clone() {
                             let done = format!(
-                                "Updated to Horizon {tag}. The world was backed up first (Backups)."
+                                "Updated to Valtic {tag}. The world was backed up first (Backups)."
                             );
                             this.server_job(format!("Updating to {tag}"), move |log| {
                                 servers::run_streamed(&dir, &["update"], log).map(|_| done)
@@ -3013,7 +3013,7 @@ impl Launcher {
         if self.older_horizon() {
             return tab
                 .child(text(theme::UI).text_color(t.muted).child(tr(
-                    "This server's Horizon is too old to list its backups here: they're in its \
+                    "This server's Valtic build is too old to list its backups here: they're in its \
                      backups folder. Update it below.",
                 )))
                 .child(self.updates_section(status, cx));
