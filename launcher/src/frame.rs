@@ -294,15 +294,23 @@ impl Launcher {
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(11.))
-            .px(px(16.))
-            .pt(px(22.))
-            .pb(px(24.))
-            .child(mark(34., &t))
-            .child(
-                ui::text(21., FontWeight::BOLD, ink::FULL)
-                    .child("Valtic"),
-            );
+            .gap(px(12.))
+            .px(px(18.))
+            .pt(px(26.))
+            .pb(px(30.))
+            .child(div()
+                .flex().items_center().justify_center()
+                .size(px(44.)).rounded(px(13.))
+                .bg(gpui::linear_gradient(
+                    135.,
+                    gpui::linear_color_stop(ui::color(0xe87caf), 0.),
+                    gpui::linear_color_stop(ui::color(0x8d4778), 1.),
+                ))
+                .child(ui::text(29., FontWeight::BOLD, ink::FULL).child("V")))
+            .child(div().flex().flex_col().gap(px(2.))
+                .child(ui::text(22., FontWeight::BOLD, ink::FULL).child("Valtic"))
+                .child(ui::text(11., FontWeight::MEDIUM, ink::NOTE)
+                    .child("CHERRY GROVE")));
         // Real sidebar navigation: the controls open Horizon's existing pages.
         let mut primary_nav = div()
             .flex()
@@ -325,7 +333,10 @@ impl Launcher {
         ] {
             let active = self.page == page;
             primary_nav = primary_nav.child(
-                ui::row(format!("valtic-primary-{label}"), active, 40., &t)
+                ui::row(format!("valtic-primary-{label}"), active, 44., &t)
+                    .bg(if active { ui::color(0x874768).opacity(0.78) }
+                        else { ui::color(0x1d1523).opacity(0.05) })
+                    .hover(|d| d.bg(ui::color(0x6c3c58).opacity(0.75)))
                     .child(ui::icon(icon_name, 17., white(ink::STRONG)))
                     .child(
                         div()
@@ -564,8 +575,8 @@ impl Launcher {
                     .px(px(12.))
                     .py(px(8.))
                     .rounded(px(radius::ROW))
-                    .bg(ui::color(0x252d3a))
-                    .hover(|s| s.bg(ui::color(0x303a49)))
+                    .bg(ui::color(0x503047))
+                    .hover(|s| s.bg(ui::color(0x6a3c5b)))
                     .cursor_pointer()
                     .child(ui::icon("discord", 18., gpui::white()))
                     .child(
@@ -640,9 +651,9 @@ impl Launcher {
             .flex_none()
             .w(px(SIDEBAR))
             .h_full()
-            .bg(ui::color(0x121721))
+            .bg(ui::color(0x211725))
             .border_r_1()
-            .border_color(white(0.07))
+            .border_color(ui::color(0xf7aed1).opacity(0.16))
             .overflow_hidden()
             .child(brand.relative())
             .child(primary_nav.relative())
