@@ -158,7 +158,7 @@ impl Theme {
         let dark = pinned_dark(choice).unwrap_or(system_dark);
         let mut night = if dark { night::NIGHT } else { night::DAWN };
         if dark {
-            // Valtic Launcher: deep charcoal surfaces with a crimson identity.
+            // Valtic Launcher: dark plum surfaces with a cherry-blossom identity.
             night.sky = [0x0d0f13, 0x101217, 0x101217, 0x15171d, 0x171a20, 0x1b1d24];
             night.page = 0x0e1014;
             night.side = 0x111319;
@@ -172,8 +172,8 @@ impl Theme {
             night.ink = 0xf4f5f7;
             night.ink_soft = 0xd6d9df;
             night.muted = 0x9299a5;
-            night.accent = 0xe5484d;
-            night.accent_hi = 0xff6870;
+            night.accent = 0xd95e96;
+            night.accent_hi = 0xf8a7d1;
             night.on_accent = 0xffffff;
         }
         Self::from(accent.apply(night.blocks()), night, accent).glass(accent)
