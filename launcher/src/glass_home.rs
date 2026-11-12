@@ -8,7 +8,7 @@ use horizon_theme::glass::{fill, ink, radius};
 use std::time::Instant;
 
 /// Play, the version and the big icons are this tall (`h-14`).
-const TALL: f32 = 56.;
+const TALL: f32 = 70.;
 /// The window width from which Home's head is laid out as the mockup's `xl` (1280 px); under it
 /// Play and the version are narrower and the invite code takes what is left of their row. The
 /// account page and the theme editor also put their two columns side by side from it.
@@ -342,7 +342,7 @@ impl Launcher {
     pub(super) fn play_group(&mut self, tag: &str, ready: bool, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         // Blossom pink is the signature Play colour.
-        let accent = ui::color(0xd95e96);
+        let accent = ui::color(0xef6aa6);
         let running = self.client.is_some();
         let follows = self
             .selected_instance()
@@ -415,9 +415,9 @@ impl Launcher {
             .items_center()
             .flex_none()
             .w(px(if self.window_width >= WIDE {
-                200.
+                282.
             } else {
-                160.
+                226.
             }))
             .h(px(TALL))
             .overflow_hidden()
@@ -646,9 +646,9 @@ impl Launcher {
                 .h(px(TALL))
                 .flex_none()
                 .min_w(px(if self.window_width >= WIDE {
-                    220.
+                    310.
                 } else {
-                    170.
+                    238.
                 }))
                 .px(px(16.))
                 .rounded(px(radius::LARGE))
