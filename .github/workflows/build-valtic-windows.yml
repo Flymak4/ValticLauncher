@@ -64,9 +64,9 @@ jobs:
             Write-Host 'Microsoft public client ID is configured.'
           }
 
-      # Embed the SAME emblem used inside the launcher as the Windows
-      # Explorer / taskbar icon. Generate it before build.rs compiles resources.
-      - name: Generate Cherry Grove Windows icon
+      # Embed the new Valtic V / blossom logo into the Windows app and taskbar.
+      # Generate it before build.rs compiles resources.
+      - name: Generate Valtic Windows app icon
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check --quiet Pillow
@@ -74,53 +74,32 @@ jobs:
           @'
           from pathlib import Path
           from PIL import Image
-          source = Path("launcher/assets/valtic/cherry_emblem.webp")
-          if not source.exists():
-              raise SystemExit("Missing Valtic cherry emblem")
+
+          # This is the NEW pink V / cherry-blossom app icon, not the old emblem.
+          source = Path("launcher/assets/valtic/valtic-app-icon.png")
+          if not source.is_file():
+              raise SystemExit(f"Missing Valtic taskbar icon: {source}")
           emblem = Image.open(source).convert("RGBA")
-          # Windows scales the entire ICO canvas, not just its visible artwork.
-          # Trim the cherry emblem's transparent halo AND any flat dark matte
-          # baked into the source so the logo is legible at taskbar sizes.
-          from PIL import ImageChops
           alpha = emblem.getchannel("A")
-          corners = [emblem.getpixel((x, y)) for x, y in [
-              (0, 0), (emblem.width - 1, 0),
-              (0, emblem.height - 1), (emblem.width - 1, emblem.height - 1)
-          ]]
-          matte = tuple(sorted(p[c] for p in corners)[len(corners)//2] for c in range(3))
-          rgb = emblem.convert("RGB")
-          difference = ImageChops.difference(rgb, Image.new("RGB", emblem.size, matte))
-          contrast = difference.convert("L").point(lambda v: 255 if v >= 30 else 0)
-          visible = alpha.point(lambda v: 255 if v >= 60 else 0)
-          from PIL import ImageChops as Chops
-          # Only strip a solid matte when it is shared by the corners; this
-          # leaves already-transparent source artwork intact.
-          corner_spread = max(
-              abs(p[c] - matte[c]) for p in corners for c in range(3)
-          )
-          if corner_spread < 24 and min(p[3] for p in corners) > 200:
-              visible = Chops.multiply(visible, contrast)
-              # Turn the removed matte transparent rather than retaining a box.
-              emblem.putalpha(Chops.multiply(alpha, contrast))
-          bounds = visible.getbbox()
+          bounds = alpha.point(lambda a: 255 if a >= 12 else 0).getbbox()
           if bounds is None:
-              bounds = alpha.getbbox()
-          if bounds is None:
-              raise SystemExit("Valtic emblem has no visible pixels")
+              raise SystemExit("Valtic app icon is transparent")
           emblem = emblem.crop(bounds)
-          # Fill 94% of the icon, allowing just enough space for antialiasing.
-          emblem.thumbnail((240, 240), Image.Resampling.LANCZOS)
+
+          # Resize UP as well as down. The source is 128px, so thumbnail()
+          # would leave it half-sized on a 256px ICO canvas.
+          scale = min(240.0 / emblem.width, 240.0 / emblem.height)
+          icon_size = (
+              max(1, round(emblem.width * scale)),
+              max(1, round(emblem.height * scale)),
+          )
+          emblem = emblem.resize(icon_size, Image.Resampling.LANCZOS)
           square = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
           square.alpha_composite(emblem, ((256 - emblem.width) // 2, (256 - emblem.height) // 2))
           dest = Path("packaging/icons/valtic.ico")
-          # Each size is rendered from the clean master; Windows picks the
-          # correct bitmap for 100%-300% display scaling.
-          # Windows chooses the displayed size; provide a dedicated, crisp 48px
-          # icon and the other DPI variants rather than forcing the taskbar height.
           sizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256]
           square.save(dest, format="ICO", sizes=[(n, n) for n in sizes])
-          print(f"Visible emblem bounds: {bounds}; generated {len(sizes)} ICO sizes")
-          print(f"Embedded Valtic icon: {dest} ({dest.stat().st_size} bytes)")
+          print(f"New Valtic app icon from {source}: {dest} ({dest.stat().st_size} bytes)")
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Could not generate the Valtic app icon' }
 
