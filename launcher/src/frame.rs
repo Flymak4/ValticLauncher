@@ -286,7 +286,6 @@ impl Launcher {
             (Page::Mods, "Mods", "package"),
             (Page::Versions, "Versions", "archive"),
             (Page::Servers, "Servers", "server"),
-            (Page::Settings, "Settings", "sliders-horizontal"),
         ] {
             let active = self.page == page;
             nav = nav.child(
@@ -328,6 +327,25 @@ impl Launcher {
                     })),
             );
         }
+
+        // Settings follows Skins in the Valtic navigation order.
+        nav = nav.child(
+            div().id("valtic-rail-settings")
+                .flex().items_center().gap(px(15.))
+                .h(px(52.)).px(px(19.))
+                .rounded(px(15.))
+                .bg(if self.page == Page::Settings {
+                    ui::color(0xb44c82).opacity(0.92)
+                } else { ui::color(0x241728).opacity(0.) })
+                .hover(|d| d.bg(ui::color(0x663352).opacity(0.92)))
+                .cursor_pointer()
+                .child(ui::icon("sliders-horizontal", 21., gpui::white()))
+                .child(ui::text(16., FontWeight::SEMIBOLD, ink::FULL).child("Settings"))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.go(Page::Settings);
+                    cx.notify();
+                }))
+        );
 
         let brand = div().flex().flex_col().items_center()
             .gap(px(2.))
