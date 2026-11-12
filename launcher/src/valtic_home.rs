@@ -90,8 +90,8 @@ impl Launcher {
             .size_full()
             .bg(gpui::linear_gradient(
                 115.,
-                gpui::linear_color_stop(ui::color(0x3a2734), 0.),
-                gpui::linear_color_stop(ui::color(0x253f43), 1.),
+                gpui::linear_color_stop(ui::color(0x69465f), 0.),
+                gpui::linear_color_stop(ui::color(0x2c4b49), 1.),
             ))
             .children(panorama.map(|p| {
                 gpui::img(p)
@@ -107,15 +107,15 @@ impl Launcher {
                 .absolute().top_0().left_0().size_full()
                 .bg(gpui::linear_gradient(
                     90.,
-                    gpui::linear_color_stop(ui::color(0x10151d).opacity(0.97), 0.),
-                    gpui::linear_color_stop(ui::color(0x10151d).opacity(0.38), 1.),
+                    gpui::linear_color_stop(ui::color(0x1b1521).opacity(0.97), 0.),
+                    gpui::linear_color_stop(ui::color(0x1b1521).opacity(0.38), 1.),
                 )))
             .child(div()
                 .absolute().bottom_0().left_0().w_full().h(px(140.))
                 .bg(gpui::linear_gradient(
                     180.,
-                    gpui::linear_color_stop(ui::color(0x10151d).opacity(0.), 0.),
-                    gpui::linear_color_stop(ui::color(0x10151d).opacity(0.6), 1.),
+                    gpui::linear_color_stop(ui::color(0x1b1521).opacity(0.), 0.),
+                    gpui::linear_color_stop(ui::color(0x1b1521).opacity(0.6), 1.),
                 )));
 
         let unprepared_art = div()
@@ -153,18 +153,19 @@ impl Launcher {
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .child(div().size(px(7.)).rounded_full().bg(ui::color(0xf39b9f)))
+                .child(div().size(px(7.)).rounded_full().bg(ui::color(0xffb9d5)))
                 .child(ui::text(12., FontWeight::BOLD, ink::FULL)
-                    .child("YOUR MINECRAFT LAUNCHPAD")))
+                    .child("✿  A WORLD IN BLOOM")))
             .child(ui::text(49., FontWeight::BOLD, ink::FULL)
                 .line_height(px(54.))
-                .child(format!("Valtic {version}")))
+                .font_family(theme::DISPLAY_FONT)
+                .child("Valtic"))
             .child(ui::text(19., FontWeight::SEMIBOLD, ink::FULL).child(
-                if current_263 { "Wilderness Bound" } else { "A new adventure starts here" }
+                if current_263 { "Your next adventure is blooming" } else { "A new adventure is blooming" }
             ))
             .child(ui::text(14., FontWeight::NORMAL, ink::FULL).child(
                 if current_263 {
-                    "Explore the dappled forest, discover forgotten camps and make the world yours."
+                    "Step into a world of pink skies, falling petals and endless Minecraft adventures."
                 } else {
                     "Your worlds, mods and favourite servers. Everything in one place."
                 }
@@ -189,14 +190,31 @@ impl Launcher {
                     }))
             }));
 
+        // Soft blossom petals are native GPUI shapes: no generated art or external assets.
+        let blossom_petals = div()
+            .absolute().top_0().right_0().size_full()
+            .child(div().absolute().top(px(34.)).right(px(84.))
+                .size(px(13.)).rounded(px(5.))
+                .bg(ui::color(0xffd2e3).opacity(0.72)))
+            .child(div().absolute().top(px(96.)).right(px(165.))
+                .size(px(8.)).rounded(px(3.))
+                .bg(ui::color(0xffa8cb).opacity(0.66)))
+            .child(div().absolute().top(px(173.)).right(px(46.))
+                .size(px(11.)).rounded(px(5.))
+                .bg(ui::color(0xffc5dc).opacity(0.65)))
+            .child(div().absolute().bottom(px(52.)).right(px(228.))
+                .size(px(7.)).rounded(px(3.))
+                .bg(ui::color(0xffe3ed).opacity(0.78)));
+
         let hero = div()
             .relative()
             .w_full()
             .min_h(px(332.))
             .rounded(px(19.))
             .overflow_hidden()
-            .bg(ui::color(0x18272c))
+            .bg(ui::color(0x2d2735))
             .child(scene)
+            .child(blossom_petals)
             .children((no_panorama && !compact).then_some(unprepared_art))
             .child(div()
                 .relative()
@@ -213,7 +231,7 @@ impl Launcher {
                 .justify_between()
                 .items_center()
                 .child(ui::text(25., FontWeight::BOLD, ink::FULL)
-                    .child("Welcome to Valtic"))
+                    .child("Welcome to the Blossom Grove"))
                 .child(ui::text(11., FontWeight::SEMIBOLD, ink::NOTE)
                     .child("MINECRAFT JAVA EDITION")))
             .child(hero)
@@ -240,10 +258,10 @@ impl Launcher {
             .min_w(px(215.))
             .rounded(px(16.))
             .overflow_hidden()
-            .bg(ui::color(0x1b222d))
+            .bg(ui::color(0x29212e))
             .border_1()
             .border_color(ui::color(0xffffff).opacity(0.06))
-            .hover(|d| d.bg(ui::color(0x252d39)))
+            .hover(|d| d.bg(ui::color(0x3a2a3b)))
             .cursor_pointer()
             .child(div()
                 .relative()
@@ -264,8 +282,8 @@ impl Launcher {
                     .absolute().bottom_0().left_0().size_full()
                     .bg(gpui::linear_gradient(
                         180.,
-                        gpui::linear_color_stop(ui::color(0x10151d).opacity(0.), 0.),
-                        gpui::linear_color_stop(ui::color(0x10151d).opacity(0.76), 1.),
+                        gpui::linear_color_stop(ui::color(0x1b1521).opacity(0.), 0.),
+                        gpui::linear_color_stop(ui::color(0x1b1521).opacity(0.76), 1.),
                     )))
                 .child(div()
                     .absolute().bottom(px(14.)).left(px(15.))
@@ -304,17 +322,17 @@ impl Launcher {
                 .child(self.valtic_feature_card(
                     &tag, 1, "NEW BIOME", "The Dappled Forest",
                     "Explore autumn poplar forests and discover a beautiful new biome.",
-                    notes_url, 0x79543d,
+                    notes_url, 0x86566d,
                 ))
                 .child(self.valtic_feature_card(
                     &tag, 2, "EXPLORATION", "Abandoned Camps",
                     "Follow explorer maps, discover camps and head into the unknown.",
-                    notes_url, 0x425a4f,
+                    notes_url, 0x547d6b,
                 ))
                 .child(self.valtic_feature_card(
                     &tag, 3, "NEW CONTENT", "Build Something New",
                     "Fresh poplar wood, cushions, wool stairs and concrete slabs.",
-                    notes_url, 0x4a455f,
+                    notes_url, 0x6d648a,
                 ))
         } else {
             div()
@@ -338,7 +356,7 @@ impl Launcher {
                 .child(div()
                     .flex().flex_col().gap(px(4.))
                     .child(ui::text(23., FontWeight::BOLD, ink::FULL)
-                        .child("Discover Minecraft"))
+                        .child("Stories from the Grove"))
                     .child(ui::text(13., FontWeight::NORMAL, ink::BODY)
                         .child(format!(
                             "The latest highlights for Minecraft {version}"
@@ -354,8 +372,8 @@ impl Launcher {
                 .px(px(20.))
                 .py(px(15.))
                 .rounded(px(12.))
-                .bg(ui::color(0x1b222c))
-                .hover(|d| d.bg(ui::color(0x262f3b)))
+                .bg(ui::color(0x29212e))
+                .hover(|d| d.bg(ui::color(0x3b2c40)))
                 .cursor_pointer()
                 .child(ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
                     .child(format!("Read the official Minecraft {version} release notes")))
