@@ -2,6 +2,9 @@ name: Build Valtic Launcher (Windows)
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -128,7 +131,7 @@ jobs:
           retention-days: 30
 
       - name: Create fallback GitHub release if upload fails
-        if: ${{ steps.upload.outcome == 'failure' }}
+        if: ${{ github.event_name != 'pull_request' && steps.upload.outcome == 'failure' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -141,7 +144,8 @@ jobs:
           "The Actions upload failed, so the ZIP is available from the [fallback GitHub release]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag)." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Publish Valtic launcher update
-        # Create the release ONLY after successfully building and verifying the Windows binary.
+        # Never publish unreviewed pull-request builds as automatic updates.
+        if: ${{ github.event_name != 'pull_request' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.VALTIC_RELEASE_TOKEN || github.token }}
