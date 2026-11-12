@@ -170,7 +170,18 @@ impl Launcher {
             );
         }
         links = links.child(
-            ui::quiet("blossom-news", "Minecraft news  ↗", 40., &self.theme)
+            ui::quiet("blossom-store", "Store  ↗", 40., &self.theme)
+                .on_click(|_, _, cx| cx.open_url("https://valticsmp.vercel.app/")),
+        );
+        links = links.child(
+            ui::quiet("blossom-servers", "Servers  ↗", 40., &self.theme)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.go(Page::Servers);
+                    cx.notify();
+                })),
+        );
+        links = links.child(
+            ui::quiet("blossom-news", "Changelog  ↗", 40., &self.theme)
                 .on_click(|_, _, cx| cx.open_url(MINECRAFT_UPDATES)),
         );
 
