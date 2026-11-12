@@ -347,15 +347,22 @@ impl Launcher {
                 }))
         );
 
+        // The sidebar uses the same bundled custom Valtic identity as Home.
+        let emblem = self.icon_image(
+            "valtic:real-cherry-emblem-v3".to_string(), 220., false,
+            || Some(include_bytes!("../assets/valtic/cherry_emblem.webp").to_vec()),
+        );
         let brand = div().flex().flex_col().items_center()
             .gap(px(2.))
-            .pt(px(23.)).pb(px(18.))
-            .child(gpui::svg()
-                .path("valtic/cherry-emblem.svg").size(px(90.)))
-            .child(ui::text(31., FontWeight::BOLD, ink::FULL)
+            .pt(px(19.)).pb(px(18.))
+            .children(emblem.map(|p| {
+                gpui::img(p).size(px(110.))
+                    .object_fit(gpui::ObjectFit::Contain)
+            }))
+            .child(ui::text(30., FontWeight::BOLD, ink::FULL)
                 .font_family(theme::DISPLAY_FONT).child("Valtic"))
-            .child(ui::text(15., FontWeight::SEMIBOLD, ink::STRONG)
-                .child("✿  LAUNCHER  ✿"));
+            .child(ui::text(14., FontWeight::SEMIBOLD, ink::STRONG)
+                .child("Launcher"));
 
         let face = self.accounts.selected().map(|a| a.uuid.clone());
         let (account_name, state_label) = self.who_plays();

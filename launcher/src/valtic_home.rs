@@ -151,7 +151,12 @@ impl Launcher {
                     }))
             }));
 
-        let hero_height = if compact { 490. } else { 520. };
+        let logo = self.icon_image(
+            "valtic:real-cherry-banner-v3".to_string(), 1000., false,
+            || Some(include_bytes!("../assets/valtic/cherry_banner.webp").to_vec()),
+        );
+        let logo_missing = logo.is_none();
+        let hero_height = if compact { 490. } else { 560. };
         let hero = div().relative()
             .w_full().min_h(px(hero_height))
             .flex().flex_col().items_center().justify_center()
@@ -168,11 +173,17 @@ impl Launcher {
             .child(petals)
             .child(div().relative()
                 .flex().flex_col().items_center().justify_center()
-                .child(
+                .children(logo.map(|picture| {
+                    gpui::img(picture)
+                        .w(px(if compact { 390. } else { 630. }))
+                        .h(px(if compact { 145. } else { 205. }))
+                        .object_fit(gpui::ObjectFit::Contain)
+                }))
+                .when(logo_missing, |d| d.child(
                     gpui::svg().path("valtic/cherry-logo.svg")
-                        .w(px(if compact { 400. } else { 615. }))
-                        .h(px(if compact { 171. } else { 220. }))
-                )
+                        .w(px(if compact { 390. } else { 615. }))
+                        .h(px(if compact { 145. } else { 205. }))
+                ))
                 .child(ui::text(if compact { 29. } else { 39. },
                         FontWeight::BOLD, ink::FULL)
                     .font_family(theme::DISPLAY_FONT)
