@@ -322,7 +322,7 @@ pub fn apply_appearance(_: &Window, _: Appearance) {}
 mod windows {
     use super::*;
     use crate::glass::{self, Kind};
-    use crate::{blocks, mark};
+    use crate::blocks;
     use gpui::{div, prelude::*, px, FontWeight, Stateful, WindowControlArea};
 
     const HEIGHT: f32 = 32.;
