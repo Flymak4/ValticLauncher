@@ -236,7 +236,7 @@ impl Launcher {
                 .border_color(ui::color(0xffffff).opacity(0.12))
                 .bg(ui::color(0x27222e).opacity(0.85))
                 .child(ui::text(15., FontWeight::MEDIUM, ink::BODY)
-                    .text_center().child(format!("{entry}  ·  Locked")));
+                    .text_center().child(format!("{entry}  ·  Locked"))));
         }
         div()
             .id("valtic-guest-preview")
