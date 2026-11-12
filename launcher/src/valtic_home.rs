@@ -101,7 +101,6 @@ impl Launcher {
             .bg(gpui::linear_gradient(
                 115.,
                 gpui::linear_color_stop(ui::color(0x854767), 0.),
-                gpui::linear_color_stop(ui::color(0x33263f), 0.5),
                 gpui::linear_color_stop(ui::color(0x182d35), 1.),
             ))
             .children(art.map(|p| {
@@ -112,7 +111,6 @@ impl Launcher {
                 .bg(gpui::linear_gradient(
                     90.,
                     gpui::linear_color_stop(ui::color(0x1b101f).opacity(0.76), 0.),
-                    gpui::linear_color_stop(ui::color(0x1b101f).opacity(0.38), 0.5),
                     gpui::linear_color_stop(ui::color(0x1b101f).opacity(0.81), 1.),
                 )))
             .child(div().absolute().bottom_0().left_0().w_full().h(px(135.))
