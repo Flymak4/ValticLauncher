@@ -272,23 +272,43 @@ impl Launcher {
             .unwrap_or_else(|| backend::game_version(&tag));
         let current_263 = version == "26.3";
         let notes_url = if current_263 { RELEASE_NOTES_263 } else { MINECRAFT_UPDATES };
-        // Use official news destinations instead of invented release stories.
-        let stories = div().flex().flex_wrap().gap(px(14.))
-            .child(self.valtic_feature_card(
-                &tag, 1, "OFFICIAL NEWS", "Minecraft updates",
-                "Discover the latest official Minecraft news and features.",
-                MINECRAFT_UPDATES, 0x86536f,
-            ))
-            .child(self.valtic_feature_card(
-                &tag, 2, "JAVA EDITION", "Explore the changes",
-                "See the official changes for your selected Minecraft release.",
-                notes_url, 0x486e67,
-            ))
-            .child(self.valtic_feature_card(
-                &tag, 3, "RELEASE NOTES", "Build something new",
-                "Keep up with updates before your next adventure.",
-                notes_url, 0x645b80,
-            ));
+        // Real Minecraft content only: the three news tiles correspond to
+        // documented 26.3 features, not invented Valtic announcements.
+        let stories = if current_263 {
+            div().flex().flex_wrap().gap(px(14.))
+                .child(self.valtic_feature_card(
+                    &tag, 1, "WILDERNESS BOUND", "The Dappled Forest",
+                    "Explore the new forest biome and the poplar wood set.",
+                    notes_url, 0x658d7d,
+                ))
+                .child(self.valtic_feature_card(
+                    &tag, 2, "EXPLORATION", "Abandoned Camps",
+                    "Follow explorer maps to hidden camps in the wild.",
+                    notes_url, 0x83638e,
+                ))
+                .child(self.valtic_feature_card(
+                    &tag, 3, "JAVA 26.3", "What's new?",
+                    "Cushions, straw beds, concrete stairs and more.",
+                    notes_url, 0x9d6483,
+                ))
+        } else {
+            div().flex().flex_wrap().gap(px(14.))
+                .child(self.valtic_feature_card(
+                    &tag, 1, "OFFICIAL NEWS", "Minecraft updates",
+                    "Discover the latest official news and releases.",
+                    MINECRAFT_UPDATES, 0x86536f,
+                ))
+                .child(self.valtic_feature_card(
+                    &tag, 2, "JAVA EDITION", "Your next adventure",
+                    "Explore Minecraft worlds and discoveries.",
+                    MINECRAFT_UPDATES, 0x53766c,
+                ))
+                .child(self.valtic_feature_card(
+                    &tag, 3, "COMMUNITY", "More to explore",
+                    "Read news from the creators of Minecraft.",
+                    MINECRAFT_UPDATES, 0x6c638f,
+                ))
+        };
         let news = div()
             .flex()
             .flex_col()
@@ -301,7 +321,7 @@ impl Launcher {
                 .child(div()
                     .flex().flex_col().gap(px(4.))
                     .child(ui::text(23., FontWeight::BOLD, ink::FULL)
-                        .child("Stories from the Grove"))
+                        .child("Latest News"))
                     .child(ui::text(13., FontWeight::NORMAL, ink::BODY)
                         .child(format!(
                             "The latest highlights for Minecraft {version}"
