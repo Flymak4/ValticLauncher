@@ -5377,7 +5377,7 @@ impl Render for Launcher {
                 .top_0()
                 .left_0()
                 .size_full()
-                .bg(gpui::rgb(0x0c1016))
+                .bg(gpui::rgb(if self.page == Page::Play { 0x1c1220 } else { 0x14121b }))
                 .into_any_element()
         } else {
             let (sky, next) = self.sky.render(
