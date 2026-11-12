@@ -245,8 +245,11 @@ impl Launcher {
                         .split_once(": ")
                         .map(|(_, rest)| rest.to_string())
                         .unwrap_or_else(|| release.name.clone());
-                    let title = if title.is_empty() {
-                        release.tag.clone()
+                    let title = if title.is_empty()
+                        || title.to_ascii_lowercase().contains("nightly")
+                        || title.to_ascii_lowercase().contains("horizon")
+                    {
+                        format!("Valtic {}", backend::game_version(&release.tag))
                     } else {
                         title
                     };

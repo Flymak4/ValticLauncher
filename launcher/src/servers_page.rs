@@ -904,7 +904,7 @@ impl Launcher {
             Fix::Prepare => match self.selected().cloned() {
                 Some(tag) if backend::is_prepared(&tag) => {
                     self.server_job("Copying the game files", move |log| {
-                        log(format!("Copying the game files prepared for Horizon {tag}"));
+                        log(format!("Copying the game files prepared for Valtic {tag}"));
                         servers::set_up(&tag)
                             .map(|_| "The game files are ready. Press Start again.".to_string())
                             .map_err(Problem::plain)
@@ -969,7 +969,7 @@ impl Launcher {
             horizon_launcher::worlds::list(&backend::game_home())
                 .into_iter()
                 .map(|w| {
-                    let line = format!("Horizon · {} · {}", tr(w.mode), bytes(w.size));
+                    let line = format!("Valtic · {} · {}", tr(w.mode), bytes(w.size));
                     (w.path, (w.name, line))
                 })
                 .collect()
@@ -2748,7 +2748,7 @@ impl Launcher {
         }
         self.setting_row(
             "Delete server",
-            tr("Remove this server from Horizon and move its worlds, settings and backups to the trash.").into(),
+            tr("Remove this server from Valtic and move its worlds, settings and backups to the trash.").into(),
             controls.into_any_element(),
         )
         .items_start()
@@ -2825,8 +2825,8 @@ impl Launcher {
                 &[("tag", tag), ("release", &release)],
             ),
             (None, Some(_), _) => trf("Up to date: Horizon {release}.", &[("release", &release)]),
-            (None, None, Some((last, _))) => format!("Horizon {release}. {last}"),
-            (None, None, None) => format!("Horizon {release}."),
+            (None, None, Some((last, _))) => format!("Valtic {release}. {last}"),
+            (None, None, None) => format!("Valtic {release}."),
         };
         let control = match available {
             Some(tag) => {
@@ -2880,7 +2880,7 @@ impl Launcher {
             .flex_col()
             .border_t_1()
             .border_color(rule)
-            .child(self.setting_row("This server's Horizon", about, control.into_any_element()));
+            .child(self.setting_row("This server's Valtic build", about, control.into_any_element()));
         if self.servers.setting("updates", "keep").is_some() {
             rows = rows.child(self.setting_row(
                 "Older versions kept",
