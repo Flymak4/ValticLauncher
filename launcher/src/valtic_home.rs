@@ -231,6 +231,11 @@ impl Launcher {
             cards = cards.child(self.valtic_news_card(article, index));
         }
         let no_news = self.minecraft_news.is_empty();
+        let (news_heading, news_subtitle) = if self.minecraft_news_failed {
+            ("Minecraft news is temporarily unavailable", "Open Minecraft.net using the button above, or check your connection.")
+        } else {
+            ("Checking official Minecraft news…", "Fetching the newest Minecraft.net stories and cover images.")
+        };
         let news = div()
             .id("valtic-official-minecraft-news")
             .flex().flex_col().gap(px(14.))
@@ -254,9 +259,9 @@ impl Launcher {
                 div().flex().flex_col().gap(px(6.))
                     .py(px(25.))
                     .child(ui::text(14., FontWeight::MEDIUM, ink::FULL)
-                        .child("Loading official Minecraft news…"))
+                        .child(news_heading))
                     .child(ui::text(12., FontWeight::NORMAL, ink::BODY)
-                        .child("Articles appear when Minecraft.net is reachable."))
+                        .child(news_subtitle))
             } else {
                 cards
             })

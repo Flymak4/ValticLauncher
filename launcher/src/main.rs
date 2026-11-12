@@ -460,8 +460,9 @@ struct Launcher {
     project_icons: instance_mods::ProjectIcons,
     /// Current verified Minecraft headlines, restored from disk while offline.
     minecraft_news: Vec<minecraft_news::Article>,
+    minecraft_news_failed: bool,
     /// Network refreshes run separately from game update events.
-    minecraft_news_rx: Receiver<Vec<minecraft_news::Article>>,
+    minecraft_news_rx: Receiver<Option<Vec<minecraft_news::Article>>>,
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
@@ -741,6 +742,7 @@ impl Launcher {
             instance_mods: Default::default(),
             project_icons: Default::default(),
             minecraft_news: minecraft_news::load_cached(),
+            minecraft_news_failed: false,
             minecraft_news_rx,
             play_pressed: None,
             bench: perf::Bench::from_env(),
@@ -808,10 +810,8 @@ impl Launcher {
         // Fetch official Minecraft news without blocking startup, and refresh it regularly.
         // The cache means the latest valid images/headlines remain visible offline.
         std::thread::spawn(move || loop {
-            if let Some(articles) = minecraft_news::refresh() {
-                if minecraft_news_tx.send(articles).is_err() {
-                    break;
-                }
+            if minecraft_news_tx.send(minecraft_news::refresh()).is_err() {
+                break;
             }
             std::thread::sleep(Duration::from_secs(minecraft_news::REFRESH_SECS));
         });
@@ -1173,7 +1173,12 @@ impl Launcher {
             }
         }
         while let Ok(news) = self.minecraft_news_rx.try_recv() {
-            self.minecraft_news = news;
+            if let Some(news) = news {
+                self.minecraft_news = news;
+                self.minecraft_news_failed = false;
+            } else {
+                self.minecraft_news_failed = self.minecraft_news.is_empty();
+            }
             changed = true;
         }
         while let Ok(msg) = self.rx.try_recv() {
