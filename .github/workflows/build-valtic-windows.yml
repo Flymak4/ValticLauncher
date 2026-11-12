@@ -121,6 +121,7 @@ jobs:
           # updates can replace the launcher safely without another download.
           # installer.rs recognises its special executable name.
           Copy-Item $exe 'publish/valtic-launcher-setup.exe'
+          # Plain EXEs are uploaded directly as GitHub release assets (no unzip step).
           Copy-Item LICENSE 'publish/LICENSE.txt'
           Copy-Item THIRD_PARTY_NOTICES.md 'publish/THIRD_PARTY_NOTICES.md'
           Copy-Item MICROSOFT_SIGN_IN.md 'publish/MICROSOFT_SIGN_IN.md'
@@ -190,7 +191,9 @@ jobs:
           } else {
             $target = 'main'
           }
-          gh release create $tag 'dist/valtic-launcher-windows-x64.zip' 'dist/Valtic-Launcher-Windows.zip' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Official Valtic Launcher update. Open the launcher and click Update & Restart to install. Existing settings, worlds and instances are preserved." --latest
+          # Publish direct EXEs for ordinary players; keep the ZIP only for the in-app updater.
+          # The setup EXE is the existing per-user installer (no extraction or admin required).
+          gh release create $tag 'publish/valtic-launcher-setup.exe' 'publish/Valtic Launcher.exe' 'dist/valtic-launcher-windows-x64.zip' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. No ZIP extraction is needed. For a portable launch, use Valtic Launcher.exe instead. Existing settings, worlds and instances are preserved. The ZIP is only for the automatic in-app updater." --latest
           if ($LASTEXITCODE -ne 0) { throw "Could not publish launcher release $tag to $destination." }
           "### In-app updater release" >> $env:GITHUB_STEP_SUMMARY
           "Published $tag to [$destination](https://github.com/$destination/releases/tag/$tag)." >> $env:GITHUB_STEP_SUMMARY
