@@ -115,6 +115,8 @@ jobs:
           dest = Path("packaging/icons/valtic.ico")
           # Each size is rendered from the clean master; Windows picks the
           # correct bitmap for 100%-300% display scaling.
+          # Windows chooses the displayed size; provide a dedicated, crisp 48px
+          # icon and the other DPI variants rather than forcing the taskbar height.
           sizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256]
           square.save(dest, format="ICO", sizes=[(n, n) for n in sizes])
           print(f"Visible emblem bounds: {bounds}; generated {len(sizes)} ICO sizes")
