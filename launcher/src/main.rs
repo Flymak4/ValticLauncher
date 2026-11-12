@@ -20,6 +20,7 @@ mod glass;
 mod glass_account;
 mod glass_home;
 mod valtic_home;
+mod minecraft_news;
 mod glass_home_lists;
 mod glass_home_mods;
 mod glass_home_packs;
@@ -457,6 +458,10 @@ struct Launcher {
     instance_mods: instance_mods::InstanceMods,
     /// Modrinth projects' icon URLs (`instance_mods.rs`).
     project_icons: instance_mods::ProjectIcons,
+    /// Current verified Minecraft headlines, restored from disk while offline.
+    minecraft_news: Vec<minecraft_news::Article>,
+    /// Network refreshes run separately from game update events.
+    minecraft_news_rx: Receiver<Vec<minecraft_news::Article>>,
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
@@ -517,6 +522,7 @@ struct Launcher {
 impl Launcher {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, rx) = channel();
+        let (minecraft_news_tx, minecraft_news_rx) = channel();
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.theme = this.settings_theme(window);
             cx.notify();
@@ -734,6 +740,8 @@ impl Launcher {
             client_since: None,
             instance_mods: Default::default(),
             project_icons: Default::default(),
+            minecraft_news: minecraft_news::load_cached(),
+            minecraft_news_rx,
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
@@ -797,6 +805,16 @@ impl Launcher {
         this.fetch_startup_releases();
         this.mods_auto_update();
         this.fetch_links();
+        // Fetch official Minecraft news without blocking startup, and refresh it regularly.
+        // The cache means the latest valid images/headlines remain visible offline.
+        std::thread::spawn(move || loop {
+            if let Some(articles) = minecraft_news::refresh() {
+                if minecraft_news_tx.send(articles).is_err() {
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_secs(minecraft_news::REFRESH_SECS));
+        });
         // Valtic shows the Minecraft skin editor rather than the old cosmetic shop.
         if home::getting_ready_preview() {
             this.preparing = true;
@@ -1153,6 +1171,10 @@ impl Launcher {
                 *shown = started.elapsed().as_secs();
                 changed = true;
             }
+        }
+        while let Ok(news) = self.minecraft_news_rx.try_recv() {
+            self.minecraft_news = news;
+            changed = true;
         }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;

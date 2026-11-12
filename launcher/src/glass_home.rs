@@ -172,8 +172,17 @@ impl Launcher {
                     }))
             );
         }
-        div().flex().flex_col().gap(px(14.)).pt(px(22.))
-            .child(ui::text(22., FontWeight::SEMIBOLD, ink::FULL).child("Your Library"))
+        div()
+            .id("valtic-library-glass")
+            .flex().flex_col().gap(px(15.))
+            .w_full().max_w(px(860.))
+            .p(px(19.))
+            .rounded(px(18.))
+            .border_1()
+            .border_color(ui::color(0xf7bfd7).opacity(0.22))
+            .bg(ui::color(0x0e0b17).opacity(0.81))
+            .child(ui::text(22., FontWeight::BOLD, ink::FULL)
+                .child("Your Library"))
             .child(div().flex().flex_wrap().gap(px(12.)).children(cards))
     }
 

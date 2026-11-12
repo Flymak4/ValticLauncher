@@ -6,11 +6,6 @@ use crate::glass_ui::{self as ui};
 use horizon_theme::glass::{ink, radius};
 use std::sync::Arc;
 
-const RELEASE_NOTES_263: &str =
-    "https://www.minecraft.net/en-us/article/minecraft-java-edition-26-3";
-const MINECRAFT_UPDATES: &str =
-    "https://www.minecraft.net/en-us/updates/minecraft-updates-timeline-and-evolution";
-
 impl Launcher {
     /// Every image is from the Minecraft installation selected by the player.
     /// Its six title panoramas are real in-game screenshots for that exact build.
@@ -161,128 +156,112 @@ impl Launcher {
                 .child(links))
     }
 
-    /// Rich discovery tiles use only panoramas taken from the selected build.
-    /// On first launch they stay as attractive, clearly abstract colour panels.
-    fn valtic_feature_card(
-        &mut self,
-        tag: &str,
-        picture_index: u8,
-        eyebrow: &'static str,
-        title: &'static str,
-        description: &'static str,
-        url: &'static str,
-        hue: u32,
+    /// A news card uses ONLY the downloaded official Minecraft article image.
+    fn valtic_news_card(
+        &mut self, article: minecraft_news::Article, index: usize,
     ) -> AnyElement {
-        let picture = self.valtic_scene(tag, picture_index, 580.);
-        let missing_picture = picture.is_none();
+        let picture = article.image_url.as_ref().and_then(|source| {
+            let source = source.clone();
+            self.icon_image(
+                format!("valtic:official-news:{source}"), 540., false,
+                || minecraft_news::cached_image(&source),
+            )
+        });
+        let url = article.url.clone();
+        let description = if article.summary.trim().is_empty() {
+            "Read the latest official Minecraft article.".to_string()
+        } else {
+            article.summary.clone()
+        };
         div()
-            .id(SharedString::from(format!("valtic-story-{picture_index}")))
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w(px(215.))
-            .rounded(px(16.))
+            .id(SharedString::from(format!("valtic-news-card-{index}")))
+            .flex().flex_col().flex_1().min_w(px(220.))
+            .rounded(px(17.))
             .overflow_hidden()
-            .bg(ui::color(0x29212e))
+            .bg(ui::color(0x1e1725).opacity(0.96))
             .border_1()
-            .border_color(ui::color(0xffffff).opacity(0.06))
-            .hover(|d| d.bg(ui::color(0x3a2a3b)))
+            .border_color(ui::color(0xf7b9d6).opacity(0.20))
             .cursor_pointer()
+            .hover(|d| d.bg(ui::color(0x362337)))
             .child(div()
-                .relative()
-                .w_full()
-                .h(px(142.))
+                .relative().w_full().h(px(155.))
                 .overflow_hidden()
                 .bg(gpui::linear_gradient(
-                    140.,
-                    gpui::linear_color_stop(ui::color(hue), 0.),
-                    gpui::linear_color_stop(ui::color(0x161e2c), 1.),
+                    130.,
+                    gpui::linear_color_stop(ui::color(0x6c3c59), 0.),
+                    gpui::linear_color_stop(ui::color(0x1b2832), 1.),
                 ))
-                .children(picture.map(|p| {
-                    gpui::img(p)
+                .children(picture.map(|image| {
+                    gpui::img(image)
                         .absolute().top_0().left_0().size_full()
                         .object_fit(gpui::ObjectFit::Cover)
                 }))
-                .children(missing_picture.then(|| {
-                    gpui::svg().path(match picture_index {
-                        1 => "valtic/news-forest.svg",
-                        2 => "valtic/news-camp.svg",
-                        _ => "valtic/news-cherry.svg",
-                    })
-                    .absolute().top_0().left_0().size_full()
-                }))
                 .child(div()
-                    .absolute().bottom_0().left_0().size_full()
+                    .absolute().top_0().left_0().size_full()
                     .bg(gpui::linear_gradient(
                         180.,
-                        gpui::linear_color_stop(ui::color(0x1b1521).opacity(0.), 0.),
-                        gpui::linear_color_stop(ui::color(0x1b1521).opacity(0.76), 1.),
+                        gpui::linear_color_stop(ui::color(0x110d17).opacity(0.), 0.),
+                        gpui::linear_color_stop(ui::color(0x110d17).opacity(0.78), 1.),
                     )))
                 .child(div()
-                    .absolute().bottom(px(14.)).left(px(15.))
-                    .px(px(10.)).py(px(5.))
+                    .absolute().bottom(px(12.)).left(px(13.))
+                    .px(px(9.)).py(px(5.))
                     .rounded(px(8.))
-                    .bg(ui::color(0x11161e).opacity(0.80))
-                    .child(ui::text(11., FontWeight::BOLD, ink::FULL).child(eyebrow))))
-            .child(div()
-                .flex()
-                .flex_col()
-                .gap(px(7.))
-                .p(px(17.))
-                .child(ui::text(18., FontWeight::BOLD, ink::FULL).child(title))
-                .child(ui::text(13., FontWeight::NORMAL, ink::BODY).child(description))
+                    .bg(ui::color(0x171322).opacity(0.88))
+                    .child(ui::text(11., FontWeight::SEMIBOLD, ink::FULL)
+                        .child("OFFICIAL MINECRAFT")))
+            )
+            .child(div().flex().flex_col().gap(px(8.)).p(px(16.))
+                .child(ui::text(17., FontWeight::BOLD, ink::FULL)
+                    .child(article.title))
+                .child(ui::text(12., FontWeight::NORMAL, ink::BODY)
+                    .truncate().child(description))
                 .child(ui::text(12., FontWeight::SEMIBOLD, ink::FULL)
-                    .pt(px(6.))
-                    .child("Discover more  ↗")))
-            .on_click(move |_, _, cx| cx.open_url(url))
+                    .pt(px(5.)).child("Read article  ↗")))
+            .on_click(move |_, _, cx| cx.open_url(&url))
             .into_any_element()
     }
 
-    /// A slender news bar at the base of the grove, like the design reference.
-    /// The title opens Valtic's configured website; release notes stay accessible.
+    /// Fresh Minecraft headlines, with images from Minecraft.net, not mockups or AI.
     pub(super) fn valtic_home_bottom(
         &mut self, rows: Div, cx: &mut Context<Self>,
     ) -> Div {
-        let tag = self.selected().cloned().unwrap_or_default();
-        let version = self.selected_instance()
-            .and_then(|i| i.java.as_ref().map(|j| j.minecraft.clone()))
-            .unwrap_or_else(|| backend::game_version(&tag));
-        let url = if self.links.website.is_empty() {
-            MINECRAFT_UPDATES.to_string()
-        } else {
-            self.links.website.clone()
-        };
+        let mut cards = div().flex().flex_wrap().gap(px(14.));
+        for (index, article) in self.minecraft_news.clone().into_iter().take(3).enumerate() {
+            cards = cards.child(self.valtic_news_card(article, index));
+        }
+        let no_news = self.minecraft_news.is_empty();
         let news = div()
-            .id("valtic-news-strip")
-            .flex().items_center().flex_wrap()
-            .gap(px(17.)).min_h(px(76.))
-            .px(px(23.)).py(px(12.))
-            .rounded(px(21.))
-            .border_1().border_color(ui::color(0xf6a6d3).opacity(0.57))
-            .bg(ui::color(0x241426).opacity(0.94))
-            .child(ui::text(14., FontWeight::BOLD, ink::FULL)
-                .text_color(ui::color(0xf69dca))
-                .child("LATEST NEWS"))
-            .child(div().w(px(1.)).h(px(27.))
-                .bg(ui::color(0xffa5d0).opacity(0.55)))
-            .child(ui::text(15., FontWeight::SEMIBOLD, ink::FULL)
-                .child("Valtic SMP — Christmas Update"))
-            .child(div().ml_auto().flex().items_center().gap(px(10.))
-                .child(ui::text(12., FontWeight::MEDIUM, ink::STRONG)
-                    .child(format!("Minecraft {version}")))
-                .child(div()
-                    .id("valtic-news-view")
-                    .flex().items_center().justify_center()
-                    .px(px(16.)).h(px(38.))
-                    .rounded(px(12.))
-                    .bg(ui::color(0x5e3855))
-                    .border_1()
-                    .border_color(ui::color(0xf6a6d3).opacity(0.36))
-                    .hover(|d| d.bg(ui::color(0x874d72)))
-                    .cursor_pointer()
-                    .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
-                        .child("View"))
-                    .on_click(move |_, _, cx| cx.open_url(&url))));
+            .id("valtic-official-minecraft-news")
+            .flex().flex_col().gap(px(14.))
+            .p(px(20.))
+            .rounded(px(19.))
+            .border_1()
+            .border_color(ui::color(0xf7b8d8).opacity(0.24))
+            .bg(ui::color(0x1d1224).opacity(0.90))
+            .child(div().flex().items_center().flex_wrap().gap(px(15.))
+                .child(ui::text(18., FontWeight::BOLD, ink::FULL)
+                    .child("Latest Minecraft News"))
+                .child(div().ml_auto().cursor_pointer()
+                    .px(px(13.)).py(px(9.))
+                    .rounded(px(11.))
+                    .bg(ui::color(0x66344f).opacity(0.92))
+                    .hover(|d| d.bg(ui::color(0x96506d)))
+                    .child(ui::text(12., FontWeight::SEMIBOLD, ink::FULL)
+                        .child("All Minecraft news  ↗"))
+                    .on_click(|_, _, cx| cx.open_url(minecraft_news::NEWS_PAGE))))
+            .child(if no_news {
+                div().flex().flex_col().gap(px(6.))
+                    .py(px(25.))
+                    .child(ui::text(14., FontWeight::MEDIUM, ink::FULL)
+                        .child("Loading official Minecraft news…"))
+                    .child(ui::text(12., FontWeight::NORMAL, ink::BODY)
+                        .child("Articles appear when Minecraft.net is reachable."))
+            } else {
+                cards
+            })
+            .child(ui::text(11., FontWeight::NORMAL, ink::BODY)
+                .child("From Minecraft.net · Auto-refreshes every 45 minutes · Works offline with cached stories"));
         let advanced = if self.home_tab == home_tabs::HomeTab::Overview {
             None
         } else {
@@ -291,8 +270,6 @@ impl Launcher {
         div().flex().flex_col()
             .gap(px(18.))
             .child(news)
-            // Libraries and advanced instance features remain accessible
-            // below the cinematic first screen, rather than getting removed.
             .child(self.glass_library(cx))
             .children(advanced)
             .child(ui::text(11., FontWeight::NORMAL, ink::DIM)

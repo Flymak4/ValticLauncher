@@ -78,17 +78,20 @@ jobs:
           if not source.exists():
               raise SystemExit("Missing Valtic cherry emblem")
           emblem = Image.open(source).convert("RGBA")
-          # Remove transparent padding so the emblem fills the Windows taskbar tile.
+          # Trim even faint shadow/transparent halos before scaling the visible
+          # Valtic mark to almost the entire Windows taskbar icon canvas.
           alpha = emblem.getchannel("A")
-          bounds = alpha.point(lambda value: 255 if value >= 16 else 0).getbbox()
+          bounds = alpha.point(lambda value: 255 if value >= 72 else 0).getbbox()
           if bounds is None:
               raise SystemExit("Valtic emblem is fully transparent")
           emblem = emblem.crop(bounds)
-          emblem.thumbnail((256, 256), Image.Resampling.LANCZOS)
+          emblem.thumbnail((250, 250), Image.Resampling.LANCZOS)
           square = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
           square.alpha_composite(emblem, ((256 - emblem.width) // 2, (256 - emblem.height) // 2))
           dest = Path("packaging/icons/valtic.ico")
-          square.save(dest, format="ICO", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+          # Cover Windows 11 taskbar DPI scaling as well as Explorer/Start.
+          sizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256]
+          square.save(dest, format="ICO", sizes=[(n, n) for n in sizes])
           print(f"Embedded Valtic icon: {dest} ({dest.stat().st_size} bytes)")
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Could not generate the Valtic app icon' }
