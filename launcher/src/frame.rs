@@ -272,59 +272,16 @@ impl Launcher {
         out
     }
 
-    /// The glass sidebar: a plate 248 wide, 14 from the window's edges.
-    pub(super) fn glass_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let soft = self.look.accent_soft;
-        self.load_packs();
-        let add = ui::icon_button(
-            "add-instance",
-            "plus-sign",
-            36.,
-            16.,
-            radius::CONTROL,
-            false,
-            &t,
-        )
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.open_instance_dialog(None);
-            cx.notify();
-        }));
-        let brand = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(12.))
-            .px(px(18.))
-            .pt(px(26.))
-            .pb(px(30.))
-            .child(div()
-                .flex().items_center().justify_center()
-                .size(px(44.)).rounded(px(13.))
-                .bg(gpui::linear_gradient(
-                    135.,
-                    gpui::linear_color_stop(ui::color(0xe87caf), 0.),
-                    gpui::linear_color_stop(ui::color(0x8d4778), 1.),
-                ))
-                .child(ui::text(29., FontWeight::BOLD, ink::FULL).child("V")))
-            .child(div().flex().flex_col().gap(px(2.))
-                .child(ui::text(22., FontWeight::BOLD, ink::FULL).child("Valtic"))
-                .child(ui::text(11., FontWeight::MEDIUM, ink::NOTE)
-                    .child("CHERRY GROVE")));
-        // Real sidebar navigation: the controls open Horizon's existing pages.
-        let mut primary_nav = div()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .px(px(10.))
-            .pb(px(12.))
-            .child(
-                ui::text(11., FontWeight::SEMIBOLD, ink::DIM)
-                    .px(px(10.))
-                    .pb(px(5.))
-                    .child("YOUR SPACE"),
-            );
-        for (page, label, icon_name) in [
+    /// Valtic's custom navigation rail, not the upstream instance explorer.
+    /// Instances are still available under the Home library and Versions pages.
+    pub(super) fn glass_sidebar(&mut self, _window: &Window, cx: &mut Context<Self>) -> Div {
+        let theme = self.theme;
+        let mut nav = div()
+            .flex().flex_col().gap(px(7.))
+            .px(px(16.))
+            .pt(px(22.));
+
+        for (page, label, symbol) in [
             (Page::Play, "Home", "home"),
             (Page::Mods, "Mods", "package"),
             (Page::Versions, "Versions", "archive"),
@@ -332,334 +289,121 @@ impl Launcher {
             (Page::Settings, "Settings", "sliders-horizontal"),
         ] {
             let active = self.page == page;
-            primary_nav = primary_nav.child(
-                ui::row(format!("valtic-primary-{label}"), active, 44., &t)
-                    .bg(if active { ui::color(0x874768).opacity(0.78) }
-                        else { ui::color(0x1d1523).opacity(0.05) })
-                    .hover(|d| d.bg(ui::color(0x6c3c58).opacity(0.75)))
-                    .child(ui::icon(icon_name, 17., white(ink::STRONG)))
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(4.))
-                            .h(px(22.))
-                            .rounded_full()
-                            .bg(if active { ui::color(soft) } else { white(0.0) }),
-                    )
-                    .child(
-                        ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
-                            .child(label),
-                    )
+            nav = nav.child(
+                div().id(SharedString::from(format!("valtic-rail-{}",label)))
+                    .flex().items_center().gap(px(15.))
+                    .h(px(52.)).px(px(19.))
+                    .rounded(px(15.))
+                    .border_1()
+                    .border_color(if active { ui::color(0xf6accd).opacity(0.38) }
+                        else { ui::color(0xffffff).opacity(0.) })
+                    .bg(if active { ui::color(0xb44c82).opacity(0.92) }
+                        else { ui::color(0x241728).opacity(0.) })
+                    .hover(|d| d.bg(ui::color(0x663352).opacity(0.92)))
+                    .cursor_pointer()
+                    .child(ui::icon(symbol, 21., gpui::white()))
+                    .child(ui::text(16., FontWeight::SEMIBOLD, ink::FULL).child(label))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.go(page);
                         cx.notify();
                     })),
             );
         }
-        // Cosmetics pages are optional upstream; keep them reachable on a Valtic build.
         if self.wardrobe_shown() {
-            for (page, label) in [(Page::Wardrobe, "Skins")] {
-                primary_nav = primary_nav.child(
-                    ui::row(format!("valtic-primary-{label}"), self.page == page, 40., &t)
-                        .child(ui::icon("user", 17., white(ink::STRONG)))
-                        .child(
-                            ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
-                                .child(label),
-                        )
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.go(page);
-                            cx.notify();
-                        })),
-                );
-            }
-        }
-        let header = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_between()
-            .px(px(16.))
-            .pt(px(16.))
-            .pb(px(8.))
-            .child(ui::text(13., FontWeight::MEDIUM, ink::NOTE).child(tr("Instances")))
-            .child(add);
-        let mut list = div()
-            .id("side-list")
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px(px(10.))
-            .children(self.glass_instances(cx));
-
-        // The player's hosted servers: not in the mockup (its Servers page lists them), kept as
-        // one more section in its pattern.
-        let servers: Vec<_> = self
-            .servers
-            .sidebar_list()
-            .map(<[_]>::to_vec)
-            .unwrap_or_else(|| self.side_servers.clone());
-        if !servers.is_empty() {
-            list = list.child(
-                ui::text(12., FontWeight::MEDIUM, ink::DIM)
-                    .px(px(8.))
-                    .pt(px(16.))
-                    .pb(px(6.))
-                    .child(tr("Servers")),
-            );
-        }
-        let mut server_rows = div().flex().flex_col().gap(px(4.));
-        for e in &servers {
-            let up = self.servers.is_up(&e.dir);
-            let open = self.page == Page::Servers && self.servers.open.as_ref() == Some(&e.dir);
-            let dir = e.dir.clone();
-            server_rows = server_rows.child(
-                ui::row(format!("side-server-{}", e.dir.display()), open, 8., &t)
-                    .child(
-                        div()
-                            .relative()
-                            .flex()
-                            .flex_none()
-                            .items_center()
-                            .justify_center()
-                            .size(px(38.))
-                            .rounded(px(radius::CONTROL))
-                            .bg(white(fill::BUTTON))
-                            .child(ui::icon("computer-terminal-01", 18., white(ink::STRONG))),
-                    )
-                    .child(ui::row_text(
-                        e.name.clone(),
-                        if up {
-                            (Tone::Live, tr("Running").into())
-                        } else {
-                            (Tone::Off, tr("Stopped").into())
-                        },
-                    ))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.open_server(dir.clone());
-                        this.go(Page::Servers);
+            let active = self.page == Page::Wardrobe;
+            nav = nav.child(
+                div().id("valtic-rail-skins")
+                    .flex().items_center().gap(px(15.))
+                    .h(px(52.)).px(px(19.))
+                    .rounded(px(15.))
+                    .bg(if active { ui::color(0xb44c82).opacity(0.92) }
+                        else { ui::color(0x241728).opacity(0.) })
+                    .hover(|d| d.bg(ui::color(0x663352).opacity(0.92)))
+                    .cursor_pointer()
+                    .child(ui::icon("user", 21., gpui::white()))
+                    .child(ui::text(16., FontWeight::SEMIBOLD, ink::FULL).child("Skins"))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.go(Page::Wardrobe);
                         cx.notify();
                     })),
             );
         }
-        let list = list.child(server_rows);
 
-        let mut foot = div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .px(px(10.))
-            .pt(px(16.))
-            .pb(px(12.));
-        // The launcher's own update (the mockup's card), while one downloads or waits.
-        let card = |title: String, right: Option<String>| {
-            div()
-                .flex()
-                .flex_col()
-                .rounded(px(radius::ROW))
-                .bg(white(fill::FIELD))
-                .p(px(14.))
-                .child(
-                    div()
-                        .flex()
-                        .items_baseline()
-                        .justify_between()
-                        // The title wraps within the card: a long translation takes a second line.
-                        .child(
-                            ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
-                                .flex_1()
-                                .min_w_0()
-                                .child(title),
-                        )
-                        .children(
-                            right.map(|r| ui::text(13., FontWeight::NORMAL, ink::NOTE).child(r)),
-                        ),
-                )
-        };
-        match &self.self_update {
-            SelfUpdate::Downloading(version, f) => {
-                foot = foot.child(
-                    card(
-                        trf("Launcher {version}", &[("version", version)]),
-                        Some(format!("{:.0}%", f * 100.)),
-                    )
-                    .child(div().mt(px(10.)).child(ui::bar(*f, soft))),
-                );
-            }
-            SelfUpdate::Ready(version) => {
-                foot = foot.child(
-                    // The version on a line of its own: the title fills the card's width.
-                    card("New Valtic update available".to_string(), None)
-                        .child(
-                            ui::text(13., FontWeight::NORMAL, ink::NOTE)
-                                .mt(px(4.))
-                                .child(trf("Launcher {version}", &[("version", version)])),
-                        )
-                        .child(
-                            ui::solid("update-launcher", tr("Update & Restart"), 32., 13., &t)
-                                .mt(px(12.))
-                                .w_full()
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.apply_launcher_update(cx);
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            }
-            SelfUpdate::Stuck(error) if !self.self_update_hidden => {
-                let why = self.launcher_update_help(error.as_deref());
-                let url = backend::download_page(&self.links.website);
-                foot = foot.child(
-                    card("New Valtic update available".to_string(), None)
-                        .child(
-                            ui::text(13., FontWeight::NORMAL, ink::NOTE)
-                                .mt(px(6.))
-                                .child(why),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(6.))
-                                .mt(px(12.))
-                                .when(self.launcher_download_available(), |actions| {
-                                    actions.child(
-                                        ui::solid(
-                                            "download-launcher",
-                                            tr("Download again"),
-                                            32.,
-                                            13.,
-                                            &t,
-                                        )
-                                        .w_full()
-                                        .on_click(move |_, _, cx| cx.open_url(&url)),
-                                    )
-                                })
-                                .child(
-                                    ui::solid(
-                                        "dismiss-launcher-update",
-                                        tr("Dismiss"),
-                                        32.,
-                                        13.,
-                                        &t,
-                                    )
-                                    .w_full()
-                                    .on_click(cx.listener(
-                                        |this, _: &ClickEvent, _, cx| {
-                                            this.self_update_hidden = true;
-                                            cx.notify();
-                                        },
-                                    )),
-                                ),
-                        ),
-                );
-            }
-            _ => {}
-        }
+        let brand = div().flex().flex_col().items_center()
+            .gap(px(2.))
+            .pt(px(23.)).pb(px(18.))
+            .child(gpui::svg()
+                .path("valtic/cherry-emblem.svg").size(px(90.)))
+            .child(ui::text(31., FontWeight::BOLD, ink::FULL)
+                .font_family(theme::DISPLAY_FONT).child("Valtic"))
+            .child(ui::text(15., FontWeight::SEMIBOLD, ink::STRONG)
+                .child("✿  LAUNCHER  ✿"));
 
-
-        if !self.links.discord.is_empty() {
-            let url = self.links.discord.clone();
-            foot = foot.child(keyboard(
-                div()
-                    .id("discord")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(10.))
-                    .mt(px(12.))
-                    // At least 40 high: a long translation wraps onto a second line, which grows the
-                    // button instead of spilling out of it.
-                    .min_h(px(40.))
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded(px(radius::ROW))
-                    .bg(ui::color(0x503047))
-                    .hover(|s| s.bg(ui::color(0x6a3c5b)))
-                    .cursor_pointer()
-                    .child(ui::icon("discord", 18., gpui::white()))
-                    .child(
-                        ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
-                            .min_w_0()
-                            .text_center()
-                            .child(tr("Discord community")),
-                    )
-                    .on_click(move |_, _, cx| cx.open_url(&url)),
-                &t,
-            ));
-        }
-        let link = |id: &'static str, label: &'static str, icon: &'static str, url: String| {
-            let id = SharedString::from(id);
-            keyboard(
-                track_hover(
-                    div()
-                        .id(id.clone())
-                        .relative()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .h(px(36.))
-                        .px(px(8.))
-                        .rounded(px(radius::ROW))
-                        .cursor_pointer()
-                        .text_color(white(ink::SOFT))
-                        .hover(|s| s.text_color(white(ink::FULL)))
-                        .child(hover_layer(&id, white(fill::HOVER), radius::ROW, 0.))
-                        .child(ui::icon(icon, 17., white(ink::SOFT)).relative())
-                        .child(
-                            div()
-                                .relative()
-                                .font_family(horizon_theme::glass::FONT)
-                                .text_size(px(14.))
-                                .child(label),
-                        )
-                        .on_click(move |_, _, cx| cx.open_url(&url)),
-                    id,
-                ),
-                &t,
+        let face = self.accounts.selected().map(|a| a.uuid.clone());
+        let (account_name, state_label) = self.who_plays();
+        let account = div()
+            .id("valtic-sidebar-account")
+            .flex().items_center().gap(px(12.))
+            .min_h(px(67.))
+            .px(px(12.))
+            .rounded(px(15.))
+            .border_1().border_color(ui::color(0xf4a1c6).opacity(0.32))
+            .bg(ui::color(0x3f2841).opacity(0.96))
+            .cursor_pointer()
+            .hover(|d| d.bg(ui::color(0x603b5b)))
+            .child(
+                div().size(px(40.)).rounded(px(9.)).overflow_hidden()
+                    .child(self.profile_heads.draw(face.as_deref(), 40., self.scale, &theme))
             )
-        };
-        let mut links = div().flex().flex_col().mt(px(8.));
-        if !self.links.sponsor.is_empty() {
-            links = links.child(link(
-                "sponsor",
-                tr("Sponsor"),
-                "favourite",
-                self.links.sponsor.clone(),
-            ));
+            .child(div().flex().flex_col().flex_1().gap(px(3.))
+                .child(ui::text(11., FontWeight::SEMIBOLD, ink::STRONG)
+                    .child(if face.is_some() { "●  MICROSOFT ACCOUNT" }
+                        else { "○  NOT SIGNED IN" }))
+                .child(ui::text(15., FontWeight::BOLD, ink::FULL)
+                    .truncate().child(account_name))
+                .child(ui::text(11., FontWeight::NORMAL, ink::NOTE)
+                    .truncate().child(state_label)))
+            .child(ui::icon("arrow-down-01", 17., white(ink::SOFT)))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                if this.accounts.selected().is_none() {
+                    this.start_sign_in();
+                } else {
+                    this.go(Page::Settings);
+                }
+                cx.notify();
+            }));
+
+        let mut footer = div()
+            .flex().flex_col().gap(px(12.))
+            .px(px(16.)).pb(px(20.))
+            .child(account);
+
+        if matches!(self.self_update, SelfUpdate::Ready(_)) {
+            footer = footer.child(
+                div().id("valtic-sidebar-updater")
+                    .flex().justify_center().items_center().h(px(38.))
+                    .rounded(px(10.))
+                    .bg(ui::color(0xd65e93))
+                    .cursor_pointer()
+                    .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
+                        .child("New launcher update  ↗"))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.apply_launcher_update(cx);
+                        cx.notify();
+                    }))
+            );
         }
-        if !self.links.website.is_empty() {
-            links = links.child(link(
-                "website",
-                tr("Our Website"),
-                "globe-02",
-                self.links.website.clone(),
-            ));
-        }
-        foot = foot.child(links).child(
-            ui::text(12., FontWeight::NORMAL, ink::DIM)
-                .id("launcher-version")
-                .px(px(8.))
-                .pt(px(8.))
-                .child(trf("Launcher {version}", &[("version", backend::VERSION)])),
-        );
 
         div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .w(px(SIDEBAR))
-            .h_full()
-            .bg(ui::color(0x211725))
+            .flex().flex_col().flex_none()
+            .w(px(SIDEBAR)).h_full()
+            .bg(ui::color(0x27192c).opacity(0.96))
             .border_r_1()
-            .border_color(ui::color(0xf7aed1).opacity(0.16))
-            .overflow_hidden()
-            .child(brand.relative())
-            .child(primary_nav.relative())
-            .child(header.relative())
-            .child(list.relative())
-            .child(foot.relative())
+            .border_color(ui::color(0xf6b4d3).opacity(0.16))
+            .child(brand)
+            .child(nav)
+            .child(div().flex_1())
+            .child(footer)
     }
 
     /// The glass top bar: the pages in a glass strip, then the player, Microsoft sign-in and
