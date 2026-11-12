@@ -230,7 +230,7 @@ impl Launcher {
         description: &'static str,
         url: &'static str,
         hue: u32,
-    ) -> Div {
+    ) -> AnyElement {
         let picture = self.valtic_scene(tag, picture_index, 580.);
         div()
             .id(SharedString::from(format!("valtic-story-{picture_index}")))
@@ -284,6 +284,7 @@ impl Launcher {
                     .pt(px(6.))
                     .child("Discover more  ↗")))
             .on_click(move |_, _, cx| cx.open_url(url))
+            .into_any_element()
     }
 
     pub(super) fn valtic_home_bottom(
