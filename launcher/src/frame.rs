@@ -482,11 +482,13 @@ impl Launcher {
                     } else {
                         gpui::white()
                     }))
-                    .child(ui::text(13., FontWeight::SEMIBOLD, if selected {
-                        ui::color(0x261323)
-                    } else {
-                        ink::FULL
-                    }).child(label))
+                    .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
+                        .text_color(if selected {
+                            ui::color(0x261323)
+                        } else {
+                            gpui::white()
+                        })
+                        .child(label))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.go(page);
                         cx.notify();
@@ -519,11 +521,13 @@ impl Launcher {
             } else {
                 gpui::white()
             }))
-            .child(ui::text(13., FontWeight::SEMIBOLD, if ready_update {
-                ui::color(0x2d172c)
-            } else {
-                ink::FULL
-            }).child(if ready_update { "Update now" } else { "Updates" }))
+            .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
+                .text_color(if ready_update {
+                    ui::color(0x2d172c)
+                } else {
+                    gpui::white()
+                })
+                .child(if ready_update { "Update now" } else { "Updates" }))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 if matches!(this.self_update, SelfUpdate::Ready(_)) {
                     this.apply_launcher_update(cx);
