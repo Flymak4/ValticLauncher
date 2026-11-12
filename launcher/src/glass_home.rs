@@ -341,7 +341,8 @@ impl Launcher {
     /// version has a newer one, the progress while preparing, updating or starting.
     pub(super) fn play_group(&mut self, tag: &str, ready: bool, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let accent = ui::color(self.look.accent);
+        // Blossom pink is the signature Play colour.
+        let accent = ui::color(0xd95e96);
         let running = self.client.is_some();
         let follows = self
             .selected_instance()
@@ -651,8 +652,8 @@ impl Launcher {
                 }))
                 .px(px(16.))
                 .rounded(px(radius::LARGE))
-                .bg(white(fill::BUTTON))
-                .hover(|s| s.bg(white(fill::ACTIVE)))
+                .bg(ui::color(0x39263b).opacity(0.90))
+                .hover(|s| s.bg(ui::color(0x54344d)))
                 .cursor_pointer()
                 .child(
                     div()
