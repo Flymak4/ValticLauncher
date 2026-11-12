@@ -2,6 +2,7 @@
 //! server-side decorations use the platform's native chrome.
 use crate::theme::Theme;
 use gpui::{Div, TitlebarOptions, Window};
+use std::sync::Arc;
 use horizon_launcher::backend::Appearance;
 
 /// Whether the launcher draws its own title bar and needs the native chrome to be transparent.
@@ -35,7 +36,7 @@ pub fn options() -> TitlebarOptions {
 /// it. The native title bar is transparent either way, so the bar is always drawn: without it the
 /// page would start under the traffic lights. AppKit keeps its controls and window interactions.
 #[cfg(target_os = "macos")]
-pub fn render(theme: &Theme, _window: &Window) -> Option<Div> {
+pub fn render(theme: &Theme, _window: &Window, _logo: Option<Arc<gpui::RenderImage>>) -> Option<Div> {
     use crate::glass::{self, Kind};
     use gpui::{div, prelude::*, px};
 
@@ -57,13 +58,13 @@ pub fn render(theme: &Theme, _window: &Window) -> Option<Div> {
     not(target_os = "linux"),
     not(target_os = "macos")
 ))]
-pub fn render(_theme: &Theme, _window: &Window) -> Option<Div> {
+pub fn render(_theme: &Theme, _window: &Window, _logo: Option<Arc<gpui::RenderImage>>) -> Option<Div> {
     None
 }
 
 /// Draw the launcher's Linux title bar when the platform uses client-side decorations.
 #[cfg(target_os = "linux")]
-pub fn render(theme: &Theme, window: &Window) -> Option<Div> {
+pub fn render(theme: &Theme, window: &Window, _logo: Option<Arc<gpui::RenderImage>>) -> Option<Div> {
     use crate::glass::{self, Kind};
     use crate::{blocks, mark};
     use gpui::{div, prelude::*, px, Decorations, FontWeight, MouseButton};
@@ -321,7 +322,7 @@ pub fn apply_appearance(_: &Window, _: Appearance) {}
 mod windows {
     use super::*;
     use crate::glass::{self, Kind};
-    use crate::{blocks, mark};
+    use crate::blocks;
     use gpui::{div, prelude::*, px, FontWeight, Stateful, WindowControlArea};
 
     const HEIGHT: f32 = 32.;
@@ -417,7 +418,19 @@ mod windows {
             .child(control_icon(control, maximized, &theme))
     }
 
-    pub fn render(theme: &Theme, window: &Window) -> Option<Div> {
+    pub fn render(theme: &Theme, window: &Window, logo: Option<Arc<gpui::RenderImage>>) -> Option<Div> {
+        // Use the exact Valtic cherry emblem for the small native chrome mark.
+        let title_logo = div()
+            .size(px(22.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .children(logo.map(|image| {
+                gpui::img(image)
+                    .size(px(22.))
+                    .object_fit(gpui::ObjectFit::Contain)
+            }));
         let drag = div()
             .id("window-drag")
             .flex()
@@ -427,7 +440,7 @@ mod windows {
             .gap(px(8.))
             .px(px(12.))
             .window_control_area(WindowControlArea::Drag)
-            .child(mark(16., theme))
+            .child(title_logo)
             .child(blocks::pixel(13., FontWeight::MEDIUM).child("Valtic Launcher"));
         Some(
             div()

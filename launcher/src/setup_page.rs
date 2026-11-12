@@ -462,7 +462,7 @@ impl Render for Setup {
             .size_full()
             .bg(t.side)
             .child(sky)
-            .children(titlebar::render(&t, window))
+            .children(titlebar::render(&t, window, None))
             .child(
                 div()
                     .flex()

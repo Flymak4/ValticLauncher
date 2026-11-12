@@ -114,9 +114,6 @@ impl Launcher {
         for (id, title, symbol, url) in [
             ("blossom-discord", "Discord", "discord", self.links.discord.clone()),
             ("blossom-website", "Website", "globe-02", self.links.website.clone()),
-            ("blossom-store", "Store", "shopping-bag-01", self.links.website.clone()),
-            ("blossom-vote", "Vote", "favourite", "https://minecraftservers.org/server/694799".to_string()),
-            ("blossom-changelog", "Changelog", "file-01", MINECRAFT_UPDATES.to_string()),
         ] {
             if url.is_empty() { continue; }
             links = links.child(
