@@ -73,11 +73,11 @@ impl Launcher {
             .unwrap_or_else(|| "My Valtic".to_string());
 
         // Bundle a Valtic scene so even a clean, first-time installation has art.
-        let scene_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("assets/valtic/cherry_grove.jpg");
+        // Include the scene in the executable: it must survive distribution as
+        // a standalone Windows .exe, not just work in the GitHub build folder.
         let art = self.icon_image(
             "valtic:cherry-scene".to_string(), 1500., false,
-            || std::fs::read(&scene_path).ok(),
+            || Some(include_bytes!("../assets/valtic/cherry_grove.jpg").to_vec()),
         );
         let custom_art = if art.is_none() {
             self.home_background().and_then(|path| {
