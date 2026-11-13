@@ -642,12 +642,14 @@ impl<'a> Ui<'a> {
 
 /// The boot screen's palette on the pure black: a white wordmark and dimmed
 /// console lines (the theme's ink is for light pages).
-const BOOT_TEXT: u32 = color::hex(0xFFFFFF, 255);
-const BOOT_LOG: u32 = color::hex(0x9BA1A6, 255);
+const BOOT_TEXT: u32 = color::hex(0xFFE9F3, 255);
+const BOOT_LOG: u32 = color::hex(0xD6A9C6, 255);
 
 /// The boot screen while the menu is not ready yet: the wordmark centred on
 /// pure black and the console's last lines at the bottom right, as the
 /// terminal prints them.
+static STARTUP_BLOSSOMS: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 pub fn draw_boot(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {
     // Pure black under everything: the frame's panorama (the title artwork
     // once the bundle is in) must not leak through.
@@ -659,6 +661,19 @@ pub fn draw_boot(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {
         batch.height,
         color::hex(0x000000, 255),
     );
+    // Soft cherry-grove palette, without external images or loading delays.
+    batch.fill(atlas, 0.0, 0.0, batch.width, batch.height, color::hex(0x1C1126, 255));
+    let started = STARTUP_BLOSSOMS.get_or_init(std::time::Instant::now);
+    let time = started.elapsed().as_secs_f32();
+    for i in 0..24 {
+        let t = i as f32;
+        let x = (batch.width * ((t * 0.618_034).fract()) + (time * 3.5 + t).sin() * 12.0)
+            .rem_euclid(batch.width.max(1.0));
+        let y = (t * 61.0 + time * (15.0 + (i % 6) as f32 * 3.0))
+            .rem_euclid(batch.height.max(1.0));
+        batch.fill(atlas, x, y, 4.0, 2.0, color::hex(0xFFB7D5, 130));
+        batch.fill(atlas, x + 1.0, y - 1.0, 2.0, 4.0, color::hex(0xFFD2E4, 100));
+    }
     wordmark(atlas, batch);
     draw_boot_log(atlas, batch, logs);
 }
@@ -670,14 +685,14 @@ fn wordmark(atlas: &HudAtlas, batch: &mut HudBatch) {
     let small = (size * 0.25).clamp(micro(), 18.0);
     let block = size * 1.45 + small * 0.6 + small * 1.5;
     let top = (ui.h - block) / 2.0;
-    ui.text_centered(Face::SemiBold, size, ui.w / 2.0, top, BOOT_TEXT, "Horizon");
+    ui.text_centered(Face::SemiBold, size, ui.w / 2.0, top, BOOT_TEXT, "VALTIC");
     ui.text_centered(
         Face::Mono,
         small,
         ui.w / 2.0,
         top + size * 1.45 + small * 0.6,
         BOOT_LOG,
-        "Rust based minecraft client",
+        "CHERRY GROVE  |  MINECRAFT 26.3",
     );
     ui.finish();
 }
@@ -695,7 +710,10 @@ pub fn draw_boot_log(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {
     let mut y = ui.h - pad - line;
     let mut drawn = 0;
     'lines: for text in logs.iter().rev() {
-        let chunks = wrapping_lines(&ui, Face::Mono, size, text, max_w);
+        // Keep engine diagnostics intact in the log file, but show Valtic's
+        // own branding during the game's loading sequence.
+        let branded = text.replace("Horizon", "Valtic").replace("horizon", "valtic");
+        let chunks = wrapping_lines(&ui, Face::Mono, size, &branded, max_w);
         for chunk in chunks.iter().rev() {
             if drawn == max_rows {
                 break 'lines;
