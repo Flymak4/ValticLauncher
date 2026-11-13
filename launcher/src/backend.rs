@@ -10,11 +10,13 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-// Valtic's published game channel; upstream remains the source synced by CI.
-// Local upstream developer builds retain the original Horizon feed.
-pub const REPO: &str = match option_env!("VALTIC_GAME_REPO") {
+// Horizon remains the engine and mod source; do not confuse its revision
+// identifiers with first-party Valtic game releases.
+pub const REPO: &str = "horizon-rust/horizon";
+/// The game delivery channel for Valtic's own verified Rust executables.
+pub const GAME_RELEASE_REPO: &str = match option_env!("VALTIC_GAME_REPO") {
     Some(repo) if !repo.is_empty() => repo,
-    _ => "horizon-rust/horizon",
+    _ => REPO,
 };
 pub const VALTIC_GAME_ASSET: &str = "valtic-windows-x64.zip";
 /// Public distribution repository for Valtic Windows launcher updates. This is
@@ -700,7 +702,7 @@ pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
 /// ETag, and read through Kira's mirror past GitHub's rate limit: [`crate::github`]).
 fn release_list() -> Result<serde_json::Value, String> {
     crate::github::json(&format!(
-        "https://api.github.com/repos/{REPO}/releases?per_page=100"
+        "https://api.github.com/repos/{GAME_RELEASE_REPO}/releases?per_page=100"
     ))
 }
 
@@ -1166,7 +1168,7 @@ fn valtic_game_digest(release: &Release, name: &str) -> Result<String, String> {
     }
     let expected = release.asset.as_ref().ok_or("Missing Valtic game asset.")?;
     let url = format!(
-        "https://api.github.com/repos/{REPO}/releases/tags/{}",
+        "https://api.github.com/repos/{GAME_RELEASE_REPO}/releases/tags/{}",
         release.tag
     );
     let data = crate::github::json(&url)?;
@@ -1292,7 +1294,7 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
         )
         .to_string()
     })?;
-    let sha256 = if REPO != "horizon-rust/horizon" {
+    let sha256 = if GAME_RELEASE_REPO != REPO {
         valtic_game_digest(release, asset)?
     } else { match &release.nightly {
         // Signed for its own version (SHA256SUMS.v2.sig), which its title names and it installs as;
@@ -3064,7 +3066,7 @@ pub fn signed_valtic_binary(tag: &str) -> Result<PathBuf, String> {
             horizon_platform::version::VANILLA_VERSION
         ));
     }
-    if REPO != "horizon-rust/horizon" && is_game_tag(tag) {
+    if GAME_RELEASE_REPO != REPO && is_game_tag(tag) {
         let executable = client_program(tag);
         return executable.is_file().then_some(executable)
             .ok_or_else(|| "The Valtic game build is missing. Reinstall this version.".into());
@@ -3531,7 +3533,7 @@ pub fn horizon_update(releases: &[Release], installed: &[String]) -> Option<Rele
         && installed.iter().all(|t| {
             // First-party Valtic releases replace older Horizon nightly installs.
             // An already-installed Valtic release is still compared normally.
-            (REPO != "horizon-rust/horizon" && crate::nightly::date_of(t).is_some())
+            (GAME_RELEASE_REPO != REPO && crate::nightly::date_of(t).is_some())
                 || compare_versions(&newest.tag, t).is_ge()
         });
     newer.then(|| newest.clone())
