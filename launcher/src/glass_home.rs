@@ -140,38 +140,104 @@ impl Launcher {
                 .child(actions))
     }
 
-    /// Instance cards underneath the Play overview, inspired by Modrinth's Library.
+    /// A compact, clickable library: selecting a card opens actions for that
+    /// instance instead of silently returning to the Play page we're already on.
     pub(super) fn glass_library(&mut self, cx: &mut Context<Self>) -> Div {
-        let mut cards = Vec::new();
+        let mut cards: Vec<AnyElement> = Vec::new();
         for instance in self.instances.list.clone() {
-            let clicked = instance.clone();
+            let opened = self.library_managing.as_deref() == Some(instance.id.as_str());
             let version = instance.java.as_ref()
                 .map(|j| format!("Minecraft {}", j.minecraft))
                 .or_else(|| self.version_of(&instance)
                     .map(|tag| format!("Minecraft {}", backend::game_version(tag))))
                 .unwrap_or_else(|| "Valtic Edition".to_string());
             let icon = self.instance_icon(&instance, 44.);
-            cards.push(
-                div().id(SharedString::from(format!("library-{}", instance.id)))
+            let selected = instance.clone();
+            let mut card = div()
+                .id(SharedString::from(format!("library-{}", instance.id)))
+                .flex().flex_col()
+                .w(px(264.)).p(px(14.))
+                .rounded(px(radius::LARGE))
+                .border_1()
+                .border_color(ui::color(0xffb9d7).opacity(if opened { 0.65 } else { 0.18 }))
+                .bg(white(if opened { fill::ACTIVE } else { fill::BUTTON }))
+                .hover(|d| d.bg(white(fill::ACTIVE)))
+                .child(div()
                     .flex().items_center().gap(px(12.))
-                    .w(px(264.)).p(px(14.))
-                    .rounded(px(radius::LARGE))
-                    .bg(white(fill::BUTTON))
-                    .hover(|d| d.bg(white(fill::ACTIVE)))
                     .cursor_pointer()
                     .child(icon)
-                    .child(div().flex().flex_col().min_w_0()
+                    .child(div().flex().flex_col().flex_1().min_w_0()
                         .child(ui::text(15., FontWeight::SEMIBOLD, ink::FULL)
-                            .truncate().child(instance.name))
+                            .truncate().child(instance.name.clone()))
                         .child(ui::text(12., FontWeight::NORMAL, ink::NOTE)
                             .truncate().child(version)))
+                    .child(ui::icon("arrow-down-01", 17., white(ink::NOTE)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.select_instance(&clicked);
+                        this.select_instance(&selected);
+                        this.library_managing = if this.library_managing.as_deref() == Some(selected.id.as_str()) {
+                            None
+                        } else {
+                            Some(selected.id.clone())
+                        };
+                        this.home_tab = home_tabs::HomeTab::Overview;
                         this.go(Page::Play);
                         cx.notify();
-                    }))
-            );
+                    })));
+            if opened {
+                let edit = instance.clone();
+                let upload = instance.clone();
+                let mods = instance.clone();
+                card = card.child(div()
+                    .mt(px(14.)).pt(px(12.))
+                    .border_t_1().border_color(ui::color(0xffb9d7).opacity(0.22))
+                    .flex().flex_col().gap(px(7.))
+                    .child(ui::quiet_icon(
+                        format!("library-edit-{}", instance.id),
+                        Some("sliders"),
+                        "Edit Instance",
+                        36.,
+                        &self.theme,
+                    ).w_full().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.open_instance_dialog(Some(edit.clone()));
+                        cx.notify();
+                    })))
+                    .child(ui::quiet_icon(
+                        format!("library-icon-{}", instance.id),
+                        Some("image-01"),
+                        "Upload Custom Icon",
+                        36.,
+                        &self.theme,
+                    ).w_full().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        // The existing image picker previews PNG/JPEG/WebP/GIF and
+                        // stores the resulting icon when Save is clicked.
+                        this.open_instance_dialog(Some(upload.clone()));
+                        this.choose_instance_picture(cx);
+                        cx.notify();
+                    })))
+                    .child(ui::quiet_icon(
+                        format!("library-mods-{}", instance.id),
+                        Some("plus-sign"),
+                        "Add / Manage Mods",
+                        36.,
+                        &self.theme,
+                    ).w_full().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.select_instance(&mods);
+                        this.go(Page::Mods);
+                        cx.notify();
+                    }))));
+            }
+            cards.push(card.into_any_element());
         }
+        let add = ui::quiet_icon(
+            "library-add-instance",
+            Some("plus-sign"),
+            "Add Instance",
+            40.,
+            &self.theme,
+        ).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            this.open_instance_dialog(None);
+            cx.notify();
+        }));
         div()
             .flex().flex_col().gap(px(15.))
             .w_full().max_w(px(860.))
@@ -180,8 +246,12 @@ impl Launcher {
             .border_1()
             .border_color(ui::color(0xf7bfd7).opacity(0.22))
             .bg(ui::color(0x0e0b17).opacity(0.81))
-            .child(ui::text(22., FontWeight::BOLD, ink::FULL)
-                .child("Your Library"))
+            .child(div().flex().items_center().justify_between().gap(px(12.))
+                .child(ui::text(22., FontWeight::BOLD, ink::FULL)
+                    .child("Your Library"))
+                .child(add))
+            .child(ui::text(12., FontWeight::NORMAL, ink::NOTE)
+                .child("Click an instance to edit it, change its icon, or manage mods."))
             .child(div().flex().flex_wrap().gap(px(12.)).children(cards))
     }
 

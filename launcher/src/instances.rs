@@ -558,7 +558,21 @@ fn create_in(
     let mut store = Store::load(data);
     let meta = store.instances.entry(slug.clone()).or_default();
     meta.name = (name != slug).then(|| name.to_string());
-    meta.icon = from.and_then(|f| f.icon.clone());
+    // Give every new instance its own Minecraft block/item icon, saved once
+    // in instances.json. Copies keep their original icon if they have one.
+    const MINECRAFT_ICONS: [&str; 16] = [
+        "grass_block_side", "oak_planks", "crafting_table_front", "cobblestone",
+        "bricks", "bookshelf", "tnt_side", "obsidian", "glowstone",
+        "diamond_ore", "diamond", "emerald", "apple", "ender_pearl",
+        "iron_pickaxe", "diamond_sword",
+    ];
+    let choice = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() % MINECRAFT_ICONS.len() as u128)
+        .unwrap_or(0) as usize;
+    meta.icon = from.and_then(|f| f.icon.clone()).or_else(|| {
+        Some(Icon::Texture(MINECRAFT_ICONS[choice].to_string()))
+    });
     meta.group = from.and_then(|f| f.group.clone());
     meta.java = from.and_then(|f| f.java.clone()).or_else(|| {
         minecraft.map(|v| JavaGame {

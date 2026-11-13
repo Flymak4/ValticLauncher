@@ -84,6 +84,12 @@ impl Instances {
 impl Launcher {
     pub(super) fn reload_instances(&mut self) {
         self.instances.list = instances::list();
+        // An instance deleted outside the launcher must not keep its manager open.
+        if self.library_managing.as_ref().is_some_and(|id| {
+            !self.instances.list.iter().any(|instance| &instance.id == id)
+        }) {
+            self.library_managing = None;
+        }
         // Hide an empty inherited default profile on a fresh install.
         // Keep older instances with saved worlds or settings intact.
         self.instances.list.retain(|i| {

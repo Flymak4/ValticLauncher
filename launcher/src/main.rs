@@ -441,6 +441,8 @@ struct Launcher {
     download_seen: Option<(Instant, usize)>,
     /// The tab open under Home's hero (`home_tabs.rs`).
     home_tab: home_tabs::HomeTab,
+    /// The Library card currently expanded for managing mods, settings, and icons.
+    library_managing: Option<String>,
     /// Home's Play or folder menu, while open (glass look).
     home_menu: glass_home::HomeMenu,
     /// Whether the pointer is over Home's folder button, which then shows its ⋯.
@@ -739,6 +741,7 @@ impl Launcher {
             prepare_started: None,
             download_seen: None,
             home_tab: home_tabs::HomeTab::from_env(),
+            library_managing: None,
             home_menu: Default::default(),
             folder_hovered: false,
             list_hover: None,
