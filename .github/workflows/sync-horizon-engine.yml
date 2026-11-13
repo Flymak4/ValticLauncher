@@ -86,6 +86,14 @@ jobs:
               exit 1
             fi
           fi
+          # Upstream can add/change path dependencies used by the standalone
+          # Valtic launcher workspace. Refresh its tracked Cargo.lock on the
+          # staged branch; otherwise Windows --locked fails despite a valid game.
+          # This happens before verification so the exact lockfile is tested.
+          if [[ -f launcher/Cargo.toml ]]; then
+            cargo metadata --format-version 1 --no-deps --manifest-path launcher/Cargo.toml >/dev/null
+            git add launcher/Cargo.lock
+          fi
           git diff --cached --check
           printf '%s\n' "$tip" > .valtic/horizon-upstream-base
           git add .valtic/horizon-upstream-base
