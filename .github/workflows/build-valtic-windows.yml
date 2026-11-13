@@ -175,6 +175,28 @@ jobs:
             throw 'In-app update archive looks incomplete.'
           }
 
+      # Keep the standalone EXE available even when this repository's GitHub
+      # Actions policy denies release creation (HTTP 403). GitHub archives
+      # Actions artifacts for transport; the public release remains a direct EXE.
+      - name: Save standalone Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Valtic-Launcher-Setup-${{ github.run_number }}
+          path: publish/valtic-launcher-setup.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Save matching Valtic game and updater assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: Valtic-Game-and-Updater-${{ github.run_number }}
+          path: |
+            publish/valtic-guest-client.exe
+            dist/valtic-launcher-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Publish Valtic launcher update
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
         # Create the release ONLY after successfully building and verifying the Windows binary.
@@ -203,7 +225,12 @@ jobs:
           # Exactly one player-facing download: the setup EXE.
           # The ZIP is required internally by the already-shipped in-app updater.
           gh release create $tag 'publish/valtic-launcher-setup.exe' 'dist/valtic-launcher-windows-x64.zip' 'publish/valtic-guest-client.exe' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. This is a direct Windows EXE download, with no ZIP or folder extraction. Existing settings, worlds and instances are preserved. The separate ZIP asset is used only by the automatic in-app updater." --latest
-          if ($LASTEXITCODE -ne 0) { throw "Could not publish launcher release $tag to $destination." }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::Release upload blocked. Enable Settings > Actions > General > Workflow permissions > Read and write permissions, or configure VALTIC_RELEASE_TOKEN with Contents: Read and write access."
+            "### Build compiled, but the release was blocked by GitHub permissions" >> $env:GITHUB_STEP_SUMMARY
+            "Change GitHub Actions workflow permissions to **Read and write** or configure secret **VALTIC_RELEASE_TOKEN** (Contents write), then rerun. The compiled EXE is also saved under the run's **Artifacts**." >> $env:GITHUB_STEP_SUMMARY
+            throw "Could not publish launcher release $tag to $destination."
+          }
           "### Download Valtic Launcher (single EXE)" >> $env:GITHUB_STEP_SUMMARY
           $exeUrl = "https://github.com/$destination/releases/download/$([uri]::EscapeDataString($tag))/valtic-launcher-setup.exe"
           "[**Download Valtic Launcher for Windows (.exe)**]($exeUrl) — just open the EXE; no folders or ZIPs to extract." >> $env:GITHUB_STEP_SUMMARY
