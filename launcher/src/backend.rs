@@ -3005,6 +3005,20 @@ fn guest_game_binary() -> Result<PathBuf, String> {
     outcome.map(|()| binary)
 }
 
+/// Use the same Valtic-built game executable for authenticated players.
+pub fn signed_valtic_binary(tag: &str) -> Result<PathBuf, String> {
+    // Other prepared Minecraft versions retain their own engine. This build
+    // only advertises the compiled version, not arbitrary older versions.
+    let selected_version = game_version(tag);
+    if selected_version != horizon_platform::version::VANILLA_VERSION {
+        return Err(format!(
+            "Valtic's native game is {}, but the selected game is {selected_version}",
+            horizon_platform::version::VANILLA_VERSION
+        ));
+    }
+    guest_game_binary()
+}
+
 /// An actual native Minecraft-style game window, restricted to its title UI.
 /// Guest Play never forwards server addresses, world paths or account sessions.
 pub fn guest_client_command(tag: &str) -> Result<Command, String> {
@@ -3029,15 +3043,23 @@ pub fn guest_client_command(tag: &str) -> Result<Command, String> {
 }
 
 pub fn client_command(tag: &str) -> Command {
+    client_command_with_executable(tag, client_program(tag))
+}
+
+/// Launch Valtic's branded game client with the player's verified session.
+/// Guest restrictions are driven by a separate environment variable and
+/// must NOT be inherited for an authenticated launch.
+pub fn client_command_with_executable(tag: &str, executable: PathBuf) -> Command {
     let home = game_home();
     let _ = fs::create_dir_all(&home);
-    let mut cmd = Command::new(client_program(tag));
+    let mut cmd = Command::new(executable);
     #[cfg(windows)]
     crate::windows_runtime::mark(&mut cmd, &version_dir(tag));
     strip_launcher_render_env(&mut cmd);
     cmd.current_dir(&home)
         .env("HORIZON_HOME", &home)
         .env_remove("HORIZON_ACCOUNT_SESSIONS")
+        .env_remove("VALTIC_GUEST_MODE")
         .arg("--resources")
         .arg(resources(tag));
     // How the game asks for a renewed session (`account session`) while it runs.
@@ -3050,7 +3072,7 @@ pub fn client_command(tag: &str) -> Command {
     if std::env::var_os("PIPEWIRE_PROPS").is_none() {
         cmd.env(
             "PIPEWIRE_PROPS",
-            "{ application.name = \"Horizon\" media.role = \"Game\" }",
+            "{ application.name = \"Valtic\" media.role = \"Game\" }",
         );
     }
     cmd
@@ -4395,7 +4417,10 @@ pub enum Msg {
     AccountRemoved(String, u64, Result<bool, String>),
     /// The owner gate's answer for the game about to start: the selected account's session
     /// file (none = offline) and why it plays offline, if it does.
-    Session(Result<crate::account::GameSession, crate::account::NoOwner>),
+    Session(
+        Result<crate::account::GameSession, crate::account::NoOwner>,
+        Option<PathBuf>,
+    ),
     /// Restricted game executable ready; no session or multiplayer arguments.
     GuestClient(String, Result<Command, String>),
     /// A modpack step's line (`modpacks`).

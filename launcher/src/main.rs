@@ -1305,10 +1305,13 @@ impl Launcher {
                         Err(error) => self.client_error = Some(error),
                     }
                 }
-                Msg::Session(session) => {
+                Msg::Session(session, valtic_executable) => {
                     self.load_auth_statuses(false);
                     if let Some(tag) = self.starting_client.take() {
-                        let mut cmd = backend::client_command(&tag);
+                        let mut cmd = match valtic_executable {
+                            Some(path) => backend::client_command_with_executable(&tag, path),
+                            None => backend::client_command(&tag),
+                        };
                         let account::GameSession { file, offline, env } = match session {
                             Ok(pass) => pass,
                             Err(refused) => {
@@ -1367,9 +1370,9 @@ impl Launcher {
                         }
                         if let Some((flag, value)) = self.quick_play.take() {
                             cmd.arg(flag).arg(value);
-                        } else if !joining_friend && !launching_pack && !self.links.official_server.is_empty() {
-                            cmd.arg("--server").arg(&self.links.official_server);
                         }
+                        // Normal Play opens Valtic's genuine Minecraft title screen.
+                        // Only an explicit Join / Quick Play action starts a server.
                         backend::append_game_args(&mut cmd);
                         // Last, around every argument: the instance's pre-launch command,
                         // wrapper and variables.
@@ -1919,8 +1922,7 @@ impl Launcher {
                 .quick_play
                 .take()
                 .filter(|(flag, _)| *flag == "--server")
-                .map(|(_, ip)| ip)
-                .or_else(|| (!self.links.official_server.is_empty()).then(|| self.links.official_server.clone()));
+                .map(|(_, ip)| ip);
             if self.client.is_some() || self.starting_client.is_some() {
                 return;
             }
@@ -2053,8 +2055,25 @@ impl Launcher {
             }
             backend::play_step("reading the sign-in");
             let session = account::session_for_game(&backend::game_home());
+            // First launch of the version-matching native game downloads
+            // Valtic's own release in this worker, never in the UI thread.
+            let valtic_executable = if session.is_ok() {
+                backend::play_step("checking Valtic's branded game client");
+                match backend::signed_valtic_binary(&tag) {
+                    Ok(binary) => Some(binary),
+                    Err(reason) => {
+                        let _ = tx.send(Msg::Line(
+                            Job::Client,
+                            format!("Using the compatible installed game instead: {reason}"),
+                        ));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             backend::play_step("starting the game");
-            let _ = tx.send(Msg::Session(session));
+            let _ = tx.send(Msg::Session(session, valtic_executable));
         });
     }
 
