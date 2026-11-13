@@ -588,7 +588,32 @@ impl Screen {
     }
 
     pub fn list(saves: &Path) -> Self {
-        let servers = servers::load(&servers_file(saves));
+        let file = servers_file(saves);
+        // Keep the official Valtic server at the top, including for players who
+        // already have the old Horizon server saved. Preserve all other entries.
+        let servers = {
+            let _guard = servers::lock();
+            let (shown, hidden) = servers::load_all(&file);
+            let official_ip = "valticsmp.ultramc.co";
+            let mut official = shown
+                .iter()
+                .find(|entry| entry.ip.eq_ignore_ascii_case(official_ip))
+                .cloned()
+                .unwrap_or_else(|| ServerEntry::new("Valtic SMP", official_ip));
+            official.name = "Valtic SMP".to_owned();
+            let mut updated = vec![official];
+            updated.extend(shown.into_iter().filter(|entry| {
+                !entry.ip.eq_ignore_ascii_case(official_ip)
+                    && !entry.name.eq_ignore_ascii_case("Horizon Official")
+                    && !entry.ip.to_ascii_lowercase().contains("sculkhosting.com")
+            }));
+            if servers::load(&file) != updated {
+                if let Err(e) = servers::save_all(&file, &updated, &hidden) {
+                    log::warn!("could not update Valtic's default server list: {e}");
+                }
+            }
+            updated
+        };
         let pings: Pings = Arc::default();
         let icons: Icons = Arc::default();
         ping_all(&servers, &pings, &icons, &servers_file(saves));
