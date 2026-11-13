@@ -8,7 +8,7 @@ impl Game<'_> {
             // A second guard after startup menu actions, before world generation/networking.
             let _ = entry;
             if let Some(title) = self.title.as_mut() {
-                title.failed("Sign in with Microsoft in Valtic Launcher to play.".into());
+                title.failed("Sign in with Microsoft in Valtic Launcher to play.");
             }
             return Ok(true);
         }
@@ -34,7 +34,7 @@ impl Game<'_> {
     pub(super) fn resume_world_entry(&mut self) -> Result<()> {
         if crate::entry::guest_menu_only() && self.pending_entry.take().is_some() {
             if let Some(title) = self.title.as_mut() {
-                title.failed("Sign in with Microsoft in Valtic Launcher to play.".into());
+                title.failed("Sign in with Microsoft in Valtic Launcher to play.");
             }
             return Ok(());
         }

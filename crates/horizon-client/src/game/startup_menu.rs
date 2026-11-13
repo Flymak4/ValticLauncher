@@ -776,7 +776,7 @@ impl Loading {
             && matches!(&action, Action::Play { .. } | Action::Create { .. } | Action::Connect { .. })
         {
             if let Some(title) = self.menu.title.as_mut() {
-                title.failed("Sign in with Microsoft in Valtic Launcher to play Minecraft.".into());
+                title.failed("Sign in with Microsoft in Valtic Launcher to play Minecraft.");
             }
             return;
         }
