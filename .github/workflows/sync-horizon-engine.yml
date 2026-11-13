@@ -1,0 +1,205 @@
+name: Sync Horizon gameplay engine into Valtic
+
+# Horizon is an upstream ENGINE, not the Valtic Launcher UI.
+# Check for new gameplay / rendering / shader / mod changes every six hours.
+on:
+  schedule:
+    - cron: '19 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sync-horizon-engine.yml'
+      - '.valtic/horizon-upstream-base'
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: valtic-horizon-engine-sync
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    name: Stage upstream engine changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      updated: ${{ steps.sync.outputs.updated }}
+      upstream: ${{ steps.sync.outputs.upstream }}
+    steps:
+      - name: Check out Valtic main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Merge compatible Horizon engine updates only
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "valtic-engine-sync[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          base="$(cat .valtic/horizon-upstream-base)"
+          if ! [[ "$base" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid Horizon baseline SHA."
+            exit 1
+          fi
+          git remote add horizon-upstream https://github.com/horizon-rust/horizon.git
+          git fetch --no-tags --filter=blob:none --depth=1 horizon-upstream main
+          tip="$(git rev-parse FETCH_HEAD)"
+          echo "upstream=$tip" >> "$GITHUB_OUTPUT"
+          echo "Checking upstream change $base -> $tip"
+          if [[ "$base" == "$tip" ]]; then
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            echo "Horizon is already in sync." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Only the upstream engine and its build/dependency inputs are eligible.
+          # In particular DO NOT sync launcher/, packaging/, or upstream workflows:
+          # those are Valtic-branded or privileged and must be reviewed separately.
+          ENGINE_PATHS=(
+            Cargo.toml Cargo.lock
+            crates mods third_party tools xtask tests
+            .cargo native-hooks.json research-lock.json
+          )
+          git fetch --no-tags --filter=blob:none --depth=1 horizon-upstream "$base"
+          git switch -c automation/horizon-engine-sync
+          git diff --binary --no-renames "$base" "$tip" -- "${ENGINE_PATHS[@]}" > "$RUNNER_TEMP/horizon-engine.patch"
+
+          if [[ -s "$RUNNER_TEMP/horizon-engine.patch" ]]; then
+            if ! git apply --3way --index --whitespace=nowarn "$RUNNER_TEMP/horizon-engine.patch"; then
+              echo "::error::Horizon conflicts with Valtic custom game code. No release will be published."
+              echo "### Conflict: manual review required" >> "$GITHUB_STEP_SUMMARY"
+              echo "Upstream: $tip; previously synced: $base" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
+          git diff --cached --check
+          printf '%s\n' "$tip" > .valtic/horizon-upstream-base
+          git add .valtic/horizon-upstream-base
+          source_count="$(git diff --cached --name-only | grep -cv '^.valtic/horizon-upstream-base$' || true)"
+          git commit -m "Sync Horizon gameplay engine to ${tip:0:12}" -m "Only game engine modules, mods and build inputs; Valtic launcher and CI stay untouched."
+          if [[ "$source_count" == 0 ]]; then
+            # No actual gameplay change: just remember upstream's newest SHA.
+            git push origin HEAD:main
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            echo "No gameplay/engine files changed; upstream SHA recorded." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Stage changes separately. NEVER push unverified engine code to main.
+          git push --force origin HEAD:refs/heads/automation/horizon-engine-sync
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+          echo "### Engine changes staged" >> "$GITHUB_STEP_SUMMARY"
+          echo "Testing ${source_count} changed engine files from upstream ${tip}." >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: Verify restricted game and launcher on Windows
+    if: needs.stage.outputs.updated == 'true'
+    needs: stage
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+      HORIZON_LAUNCHER_VERSION: "0.0.0-sync-test"
+      HORIZON_LAUNCHER_TAG: "launcher@0.0.0-sync-test"
+      VALTIC_OFFICIAL_BUILD: "1"
+      HORIZON_TELEMETRY_URL: "off"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: automation/horizon-engine-sync
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            launcher
+      - name: Compile the Valtic restricted guest game
+        run: cargo build --release --locked --package horizon-client --bin horizon-client
+      - name: Compile Valtic Launcher against updated engine
+        working-directory: launcher
+        run: cargo build --release --locked --bin valtic-launcher
+      - name: Verify game and launcher executables
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'target/release/horizon-client.exe')) {
+            throw 'Guest game binary was not produced'
+          }
+          if (!(Test-Path 'launcher/target/release/valtic-launcher.exe')) {
+            throw 'Valtic launcher binary was not produced'
+          }
+
+  promote:
+    name: Promote verified engine and trigger Valtic release
+    if: needs.stage.outputs.updated == 'true'
+    needs: [stage, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: automation/horizon-engine-sync
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Fast-forward main only if Valtic has not changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            echo "::error::main changed during validation. No unverified rebase or forced push."
+            exit 1
+          fi
+          git push origin HEAD:main
+          echo "Engine passed Windows compilation and is now on main." >> "$GITHUB_STEP_SUMMARY"
+      - name: Build and publish the updated Valtic Launcher
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A push using GITHUB_TOKEN does not trigger push workflows.
+          # An explicit workflow_dispatch does, and publish=true releases only
+          # after the actual production Windows build succeeds.
+          gh workflow run build-valtic-windows.yml \
+            --repo "$GITHUB_REPOSITORY" --ref main -f publish=true
+          echo "The production build will publish the setup EXE and in-app update only after success." >> "$GITHUB_STEP_SUMMARY"
+
+  notify:
+    name: Report blocked automatic updates
+    if: ${{ always() && (needs.stage.result == 'failure' || needs.verify.result == 'failure' || needs.promote.result == 'failure') }}
+    needs: [stage, verify, promote]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Open or update one issue, instead of publishing a broken engine
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGE: ${{ needs.stage.result }}
+          VERIFY: ${{ needs.verify.result }}
+          PROMOTE: ${{ needs.promote.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="[Valtic] Horizon engine sync needs attention"
+          link="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="Automated Horizon engine synchronisation was stopped. Valtic's published launcher was NOT replaced by an unverified engine.
+
+          Stage: $STAGE
+          Windows verification: $VERIFY
+          Promotion: $PROMOTE
+          Full logs: $link
+
+          Resolve the conflict or compilation error before promoting upstream game changes. Custom Valtic UI, logo, Microsoft sign-in and guest restrictions must remain intact."
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1 || true)"
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

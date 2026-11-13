@@ -2,6 +2,12 @@ name: Build Valtic Launcher (Windows)
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish an already verified Horizon sync build as a Valtic update"
+        required: false
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
   push:
@@ -12,6 +18,10 @@ on:
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'mods/**'
+      - 'third_party/**'
+      - 'xtask/**'
+      - 'native-hooks.json'
       - '.github/workflows/build-valtic-windows.yml'
 
 # Release one directly downloadable setup EXE; keep the internal update archive for auto-updates.
@@ -166,7 +176,7 @@ jobs:
           }
 
       - name: Publish Valtic launcher update
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
         # Create the release ONLY after successfully building and verifying the Windows binary.
         shell: pwsh
         env:
