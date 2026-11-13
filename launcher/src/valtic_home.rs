@@ -58,6 +58,98 @@ impl Launcher {
     /// version switching, Microsoft login and instance editing.
     /// Screenshot-inspired Valtic homepage. The logo is a bundled Valtic
     /// SVG, while Play, the version picker, and links remain live native controls.
+    /// An unobtrusive glass card for the actual Valtic SMP status.
+    /// The favicon comes from the server's 64x64 PNG, not the mockup artwork.
+    fn valtic_server_card(&mut self) -> Div {
+        use std::hash::{Hash, Hasher};
+
+        let snapshot = self.valtic_status.clone();
+        let icon = snapshot.as_ref().and_then(|s| s.icon.clone());
+        let picture = icon.and_then(|bytes| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            bytes.hash(&mut hasher);
+            let key = format!("valtic:smp-icon:{:x}", hasher.finish());
+            self.icon_image(key, 100., false, move || Some(bytes))
+        });
+        let thumbnail: AnyElement = match picture {
+            Some(image) => gpui::img(image)
+                .w(px(77.)).h(px(77.))
+                .object_fit(gpui::ObjectFit::Contain)
+                .into_any_element(),
+            None => gpui::svg()
+                .path("valtic/cherry-emblem.svg")
+                .w(px(66.)).h(px(66.))
+                .into_any_element(),
+        };
+
+        let state = match snapshot.as_ref().map(|s| s.online) {
+            Some(true) => "Online",
+            Some(false) => "Offline",
+            None if self.valtic_status_failed => "Unavailable",
+            None => "Checking...",
+        };
+        let colour = match snapshot.as_ref().map(|s| s.online) {
+            Some(true) => 0x60ea95,
+            Some(false) => 0xff858e,
+            None => 0xffc7de,
+        };
+        let players = match snapshot.as_ref() {
+            Some(s) if s.online && s.capacity > 0 => {
+                format!("{} / {} players online", s.players, s.capacity)
+            }
+            Some(s) if s.online => format!("{} players online", s.players),
+            Some(_) => "0 players online".to_string(),
+            None => "Player count unavailable".to_string(),
+        };
+        let motd = snapshot.as_ref()
+            .filter(|s| s.online && !s.motd.is_empty())
+            .map(|s| s.motd.as_str())
+            .unwrap_or("Minecraft survival · Java & Bedrock");
+
+        div()
+            .id("valtic-smp-server-card")
+            .absolute().top(px(23.)).left(px(26.))
+            .w(px(if self.window_width < 850. { 328. } else { 440. }))
+            .rounded(px(20.))
+            .border_1()
+            .border_color(ui::color(0xf7a7cc).opacity(0.64))
+            .bg(ui::color(0x27152d).opacity(0.91))
+            .shadow_lg()
+            .p(px(16.))
+            .flex().flex_col().gap(px(11.))
+            .child(div().flex().items_center().gap(px(14.))
+                .child(div().flex_none().w(px(82.)).h(px(82.))
+                    .rounded(px(16.))
+                    .overflow_hidden()
+                    .border_1().border_color(ui::color(0xfb94c7).opacity(0.57))
+                    .bg(ui::color(0x56304d).opacity(0.8))
+                    .flex().items_center().justify_center()
+                    .child(thumbnail))
+                .child(div().flex_1().min_w_0()
+                    .flex().flex_col().gap(px(8.))
+                    .child(div().flex().items_center().flex_wrap().gap(px(10.))
+                        .child(ui::text(20., FontWeight::BOLD, ink::FULL)
+                            .child("Valtic SMP"))
+                        .child(div().flex().items_center().gap(px(6.))
+                            .rounded(px(12.)).px(px(9.)).py(px(5.))
+                            .bg(ui::color(0x3b303c).opacity(0.84))
+                            .child(div().size(px(7.)).rounded_full()
+                                .bg(ui::color(colour)))
+                            .child(ui::text(11., FontWeight::MEDIUM, ink::FULL)
+                                .child(state))))
+                    .child(ui::text(12., FontWeight::SEMIBOLD, ink::FULL)
+                        .child(valtic_status::ADDRESS))
+                    .child(ui::text(12., FontWeight::MEDIUM, ink::SOFT)
+                        .child(players))))
+            .child(div().w_full()
+                .rounded(px(11.))
+                .bg(ui::color(0x160f1d).opacity(0.52))
+                .px(px(11.)).py(px(8.))
+                .child(ui::text(12., FontWeight::NORMAL, ink::FULL)
+                    .truncate()
+                    .child(motd.to_string())))
+    }
+
     pub(super) fn valtic_home_head(
         &mut self, tag: &str, prepared: bool, cx: &mut Context<Self>,
     ) -> Div {
@@ -66,6 +158,7 @@ impl Launcher {
         let ready = prepared || java.is_some();
         let compact = self.window_width < 1050.;
 
+        let server_card = self.valtic_server_card();
         let mut petals = div().absolute().top_0().left_0().size_full();
         for (i, (x, y, size)) in [
             (0.06, 39., 10.), (0.22, 112., 7.), (0.43, -18., 9.),
@@ -134,6 +227,7 @@ impl Launcher {
                     gpui::linear_color_stop(ui::color(0x1b0e22).opacity(0.37), 1.),
                 )))
             .child(petals)
+            .child(server_card)
             .child(div().relative()
                 .flex().flex_col().items_center().justify_center()
                 // The existing custom SVG has Valtic's block lettering,
