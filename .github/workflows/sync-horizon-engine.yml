@@ -69,8 +69,14 @@ jobs:
             .cargo native-hooks.json research-lock.json
             ':(exclude)tools/pad_glyphs/gen.py'
             # These are Valtic-owned title/menu and guest permission rules.
+            # Valtic-owned game presentation survives all upstream engine syncs.
             ':(exclude)crates/horizon-client/src/title.rs'
             ':(exclude)crates/horizon-client/src/entry.rs'
+            ':(exclude)crates/horizon-client/src/horizon_look.rs'
+            ':(exclude)crates/horizon-client/src/ui_theme.rs'
+            ':(exclude)crates/horizon-client-render/src/gfx/panorama.rs'
+            ':(exclude)crates/horizon-client/src/game/window_handler.rs'
+            ':(exclude)crates/horizon-client/src/game/split/windows.rs'
             ':(exclude)crates/horizon-client/src/game/startup_menu.rs'
             ':(exclude)crates/horizon-client/src/game/world_entry.rs'
           )
@@ -123,6 +129,7 @@ jobs:
       HORIZON_LAUNCHER_VERSION: "0.0.0-sync-test"
       HORIZON_LAUNCHER_TAG: "launcher@0.0.0-sync-test"
       VALTIC_OFFICIAL_BUILD: "1"
+      VALTIC_GAME_REPO: ${{ github.repository }}
       HORIZON_TELEMETRY_URL: "off"
     steps:
       - uses: actions/checkout@v4

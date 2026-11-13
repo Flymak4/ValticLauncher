@@ -49,6 +49,8 @@ jobs:
       VALTIC_OFFICIAL_BUILD: "1"
       # Set this variable to a separate PUBLIC releases repo if the source stays private.
       VALTIC_UPDATE_REPO: ${{ vars.VALTIC_UPDATE_REPO || github.repository }}
+      # Never download the upstream executable into a Valtic installation.
+      VALTIC_GAME_REPO: ${{ vars.VALTIC_UPDATE_REPO || github.repository }}
     steps:
       - name: Check out Valtic source
         uses: actions/checkout@v4
@@ -156,6 +158,43 @@ jobs:
           New-Item -ItemType Directory -Path publish -Force | Out-Null
           Copy-Item $guestExe 'publish/valtic-guest-client.exe'
 
+          # The actual signed-in game uses the SAME Valtic-branded Rust source,
+          # rather than installing Horizon's published game binary.
+          $gameFolder = 'publish-game/valtic-windows-x64'
+          New-Item -ItemType Directory -Path $gameFolder -Force | Out-Null
+          Copy-Item $guestExe "$gameFolder/valtic-client.exe"
+          Copy-Item 'research-lock.json' "$gameFolder/research-lock.json"
+
+          # Use the Cherry Grove artwork already bundled in Valtic Launcher.
+          # Keep the six cubemap faces in a separate versioned override folder:
+          # Mojang's prepared assets and player resource packs remain untouched.
+          @'
+          from pathlib import Path
+          from PIL import Image, ImageEnhance
+          source = Path('launcher/assets/valtic/cherry_grove.jpg')
+          if not source.is_file():
+              raise SystemExit('Missing bundled Cherry Grove scene')
+          image = Image.open(source).convert('RGB')
+          side = min(image.size)
+          out = Path('publish-game/valtic-windows-x64/valtic-panorama/assets/minecraft/textures/gui/title/background')
+          out.mkdir(parents=True, exist_ok=True)
+          for face in range(6):
+              # Different, overlapping square views from our existing Minecraft
+              # cherry-grove artwork. Six equal-sized textures for the cube.
+              left = round((image.width - side) * face / 5)
+              top = round((image.height - side) * (5 - face) / 10)
+              view = image.crop((left, top, left + side, top + side))
+              view = ImageEnhance.Color(view).enhance(0.93)
+              view.resize((512, 512), Image.Resampling.LANCZOS).save(out / f'panorama_{face}.png')
+          print('Bundled six 512x512 Valtic Cherry Grove panorama faces')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the Valtic panorama' }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path $gameFolder -DestinationPath 'dist/valtic-windows-x64.zip' -CompressionLevel Optimal -Force
+          if ((Get-Item 'dist/valtic-windows-x64.zip').Length -lt 1MB) {
+            throw 'Valtic game archive looks incomplete.'
+          }
+
           # A single directly downloadable EXE: its filename activates the built-in
           # setup wizard, which installs the launcher and supports future updates.
           # Do not package a player download ZIP or an outer folder.
@@ -194,6 +233,7 @@ jobs:
           path: |
             publish/valtic-guest-client.exe
             dist/valtic-launcher-windows-x64.zip
+            dist/valtic-windows-x64.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -222,8 +262,20 @@ jobs:
           } else {
             $target = 'main'
           }
-          # Exactly one player-facing download: the setup EXE.
-          # The ZIP is required internally by the already-shipped in-app updater.
+          # Publish the game's first-party release separately from the launcher.
+          # Game updates follow the verified Horizon source merged into this fork,
+          # while clients download ONLY the Valtic-built game archive.
+          $gameTag = "v1.0.$env:GITHUB_RUN_NUMBER"
+          $gameRelease = gh release view $gameTag --repo $destination --json tagName --jq .tagName 2>$null
+          if ($LASTEXITCODE -eq 0 -and $gameRelease -eq $gameTag) {
+            gh release upload $gameTag 'dist/valtic-windows-x64.zip' --clobber --repo $destination
+          } else {
+            gh release create $gameTag 'dist/valtic-windows-x64.zip' --repo $destination --target $target --title "Valtic Client 26.3 ($gameTag)" --notes "Official Valtic Rust game build, based on the continuously synced Horizon engine. Valtic Cherry Grove panorama and startup included. Installed automatically by Valtic Launcher." --latest=false
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish Valtic game $gameTag" }
+
+          # Exactly one player-facing launcher download: the setup EXE.
+          # The ZIP files are used internally by launcher / game auto-updates.
           gh release create $tag 'publish/valtic-launcher-setup.exe' 'dist/valtic-launcher-windows-x64.zip' 'publish/valtic-guest-client.exe' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. This is a direct Windows EXE download, with no ZIP or folder extraction. Existing settings, worlds and instances are preserved. The separate ZIP asset is used only by the automatic in-app updater." --latest
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::error::Release upload blocked. Enable Settings > Actions > General > Workflow permissions > Read and write permissions, or configure VALTIC_RELEASE_TOKEN with Contents: Read and write access."
@@ -234,7 +286,7 @@ jobs:
           "### Download Valtic Launcher (single EXE)" >> $env:GITHUB_STEP_SUMMARY
           $exeUrl = "https://github.com/$destination/releases/download/$([uri]::EscapeDataString($tag))/valtic-launcher-setup.exe"
           "[**Download Valtic Launcher for Windows (.exe)**]($exeUrl) — just open the EXE; no folders or ZIPs to extract." >> $env:GITHUB_STEP_SUMMARY
-          "Published $tag to [$destination](https://github.com/$destination/releases/tag/$tag)." >> $env:GITHUB_STEP_SUMMARY
+          "Published $tag and game $gameTag to [$destination](https://github.com/$destination/releases)." >> $env:GITHUB_STEP_SUMMARY
           $visibility = gh repo view $destination --json visibility --jq '.visibility'
           if ($visibility -ne 'PUBLIC') {
             Write-Host "::warning::The updater's release repository is PRIVATE. Players cannot check for updates until a PUBLIC distribution repository is configured."

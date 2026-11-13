@@ -8,7 +8,7 @@ use horizon_theme as theme;
 
 /// Give the engine Horizon's look; call it once, before the first window opens.
 pub(crate) fn give() {
-    horizon_client::window::set_icon_png(theme::ICON_PNG);
+    horizon_client::window::set_icon_png(include_bytes!("../../../launcher/assets/valtic/valtic-app-icon.png"));
     let (blocks, dark) = (theme::BLOCKS_DARK, theme::DARK);
     horizon_client::menu_style::install(MenuStyle {
         settings: SettingsColours {

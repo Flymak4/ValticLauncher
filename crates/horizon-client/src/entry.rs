@@ -77,7 +77,7 @@ pub fn main_with(mods: crate::mod_api::Mods) {
             thread,
         );
         // The log's first line names the build, so a bug report that carries the log says which one it was.
-        log::info!("Horizon {}", crash::version());
+        log::info!("Valtic {}", crash::version());
         crash::install(home.clone(), side);
     }
     let renderers = crate::mod_api::mods()

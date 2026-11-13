@@ -145,7 +145,11 @@ fn load_face(
 ) -> Result<(std::path::PathBuf, Vec<u8>, (u32, u32, Vec<u8>))> {
     let name = format!("panorama_{face}.png");
     let mut tried: Vec<(std::path::PathBuf, String)> = Vec::new();
-    for layer in [root, defaults] {
+    // First-party Valtic builds may ship a Cherry Grove panorama beside the game.
+    // Do not mutate the player's Minecraft assets or resource packs. Other
+    // builds, with no override, retain the original vanilla loading order.
+    let valtic_root = std::env::var_os("VALTIC_PANORAMA_DIR").map(std::path::PathBuf::from);
+    for layer in valtic_root.as_deref().into_iter().chain([root, defaults]) {
         let path = layer.join(BACKGROUND).join(&name);
         // A vanilla-only installation loads one root twice.
         if tried.first().is_some_and(|(seen, _)| *seen == path) {
