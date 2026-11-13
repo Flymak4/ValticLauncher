@@ -162,7 +162,7 @@ jobs:
           # rather than installing Horizon's published game binary.
           $gameFolder = 'publish-game/valtic-windows-x64'
           New-Item -ItemType Directory -Path $gameFolder -Force | Out-Null
-          Copy-Item $guestExe "$gameFolder/horizon-client.exe"
+          Copy-Item $guestExe "$gameFolder/valtic-client.exe"
           Copy-Item 'research-lock.json' "$gameFolder/research-lock.json"
 
           # Use the Cherry Grove artwork already bundled in Valtic Launcher.

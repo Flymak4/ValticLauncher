@@ -75,6 +75,8 @@ jobs:
             ':(exclude)crates/horizon-client/src/horizon_look.rs'
             ':(exclude)crates/horizon-client/src/ui_theme.rs'
             ':(exclude)crates/horizon-client-render/src/gfx/panorama.rs'
+            ':(exclude)crates/horizon-client/src/game/window_handler.rs'
+            ':(exclude)crates/horizon-client/src/game/split/windows.rs'
             ':(exclude)crates/horizon-client/src/game/startup_menu.rs'
             ':(exclude)crates/horizon-client/src/game/world_entry.rs'
           )

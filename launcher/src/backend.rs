@@ -518,7 +518,11 @@ const LAUNCHER_BINARY: &str = if cfg!(windows) {
 };
 
 pub(crate) const CLIENT: &str = if cfg!(windows) {
-    "horizon-client.exe"
+    if option_env!("VALTIC_GAME_REPO").is_some() {
+        "valtic-client.exe"
+    } else {
+        "horizon-client.exe"
+    }
 } else {
     "horizon-client"
 };
