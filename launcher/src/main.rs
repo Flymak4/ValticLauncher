@@ -20,6 +20,7 @@ mod glass;
 mod glass_account;
 mod glass_home;
 mod valtic_home;
+mod valtic_status;
 mod minecraft_news;
 mod glass_home_lists;
 mod glass_home_mods;
@@ -463,6 +464,10 @@ struct Launcher {
     minecraft_news_failed: bool,
     /// Network refreshes run separately from game update events.
     minecraft_news_rx: Receiver<Option<Vec<minecraft_news::Article>>>,
+    /// Valtic SMP's live Java server status, including its real favicon.
+    valtic_status: Option<valtic_status::Snapshot>,
+    valtic_status_failed: bool,
+    valtic_status_rx: Receiver<Option<valtic_status::Snapshot>>,
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
@@ -524,6 +529,7 @@ impl Launcher {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, rx) = channel();
         let (minecraft_news_tx, minecraft_news_rx) = channel();
+        let (valtic_status_tx, valtic_status_rx) = channel();
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.theme = this.settings_theme(window);
             cx.notify();
@@ -744,6 +750,9 @@ impl Launcher {
             minecraft_news: minecraft_news::load_cached(),
             minecraft_news_failed: false,
             minecraft_news_rx,
+            valtic_status: None,
+            valtic_status_failed: false,
+            valtic_status_rx,
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
@@ -814,6 +823,13 @@ impl Launcher {
                 break;
             }
             std::thread::sleep(Duration::from_secs(minecraft_news::REFRESH_SECS));
+        });
+        // Refresh the server status/favicon on a worker so rendering never waits on a ping.
+        std::thread::spawn(move || loop {
+            if valtic_status_tx.send(valtic_status::refresh()).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(valtic_status::REFRESH_SECS));
         });
         // Valtic shows the Minecraft skin editor rather than the old cosmetic shop.
         if home::getting_ready_preview() {
@@ -1179,6 +1195,11 @@ impl Launcher {
             } else {
                 self.minecraft_news_failed = self.minecraft_news.is_empty();
             }
+            changed = true;
+        }
+        while let Ok(status) = self.valtic_status_rx.try_recv() {
+            self.valtic_status_failed = status.is_none();
+            self.valtic_status = status;
             changed = true;
         }
         while let Ok(msg) = self.rx.try_recv() {
