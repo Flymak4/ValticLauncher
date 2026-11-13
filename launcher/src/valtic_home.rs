@@ -315,46 +315,6 @@ impl Launcher {
             .into_any_element()
     }
 
-    /// Tell unsigned visitors about restricted game access; Play opens the
-    /// actual guest-locked native game once its assets are prepared.
-    fn valtic_guest_preview(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let entries = ["Singleplayer", "Multiplayer", "Minecraft Realms"];
-        let mut menu = div().flex().flex_col().gap(px(8.));
-        for entry in entries {
-            menu = menu.child(div()
-                .px(px(18.)).py(px(13.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(ui::color(0xffffff).opacity(0.12))
-                .bg(ui::color(0x27222e).opacity(0.85))
-                .child(ui::text(15., FontWeight::MEDIUM, ink::BODY)
-                    .text_center().child(format!("{entry}  ·  Locked"))));
-        }
-        div()
-            .id("valtic-guest-preview")
-            .flex().flex_col().gap(px(14.))
-            .p(px(22.)).rounded(px(18.))
-            .bg(ui::color(0x1d1724).opacity(0.94))
-            .border_1().border_color(ui::color(0xf7b8d8).opacity(0.24))
-            .child(ui::text(20., FontWeight::BOLD, ink::FULL)
-                .child("Guest Minecraft Menu"))
-            .child(ui::text(13., FontWeight::NORMAL, ink::BODY)
-                .child("Open the real game menu with Guest Play. Worlds, servers and Realms stay locked until you sign in with Microsoft. A prepared Valtic version is required."))
-            .child(menu)
-            .child(div().id("valtic-guest-sign-in")
-                .cursor_pointer()
-                .rounded(px(10.)).px(px(18.)).py(px(13.))
-                .bg(ui::color(0x75435f))
-                .hover(|d| d.bg(ui::color(0x9c587b)))
-                .child(ui::text(14., FontWeight::BOLD, ink::FULL)
-                    .text_center().child("Sign in with Microsoft to play"))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.sign_in_to_play();
-                    cx.notify();
-                })))
-            .into_any_element()
-    }
-
     /// Fresh Minecraft headlines, with images from Minecraft.net, not mockups or AI.
     pub(super) fn valtic_home_bottom(
         &mut self, rows: Div, cx: &mut Context<Self>,
@@ -407,7 +367,6 @@ impl Launcher {
         };
         div().flex().flex_col()
             .gap(px(18.))
-            .children((self.owner != Some(true)).then(|| self.valtic_guest_preview(cx)))
             .child(news)
             .child(self.glass_library(cx))
             .children(advanced)

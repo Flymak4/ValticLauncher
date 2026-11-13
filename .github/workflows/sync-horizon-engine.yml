@@ -68,6 +68,11 @@ jobs:
             crates mods third_party tools xtask tests
             .cargo native-hooks.json research-lock.json
             ':(exclude)tools/pad_glyphs/gen.py'
+            # These are Valtic-owned title/menu and guest permission rules.
+            ':(exclude)crates/horizon-client/src/title.rs'
+            ':(exclude)crates/horizon-client/src/entry.rs'
+            ':(exclude)crates/horizon-client/src/game/startup_menu.rs'
+            ':(exclude)crates/horizon-client/src/game/world_entry.rs'
           )
           git fetch --no-tags --filter=blob:none --depth=1 horizon-upstream "$base"
           git switch -c automation/horizon-engine-sync

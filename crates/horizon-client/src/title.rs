@@ -93,24 +93,71 @@ fn recover_issues(dir: &Path) -> [Option<crate::save::DatIssue>; 2] {
 /// The SafetyScreen's column (WarningScreen: title, 12 px around the message
 /// box of its lines and 4 px padding, the checkbox, then the buttons, 8 px
 /// apart): the title's top.
-/// `LogoRenderer.extractRenderState`: the logo's top 44 of 64 rows, then the
-/// edition banner's top 14 of 16 rows overlapping its bottom by 7.
-fn draw_logo(atlas: &HudAtlas, batch: &mut HudBatch, w: f32) {
-    batch.sprite_region(
-        atlas,
-        "gui/title/minecraft",
-        [(w / 2.0).floor() - 128.0, 30.0, 256.0, 44.0],
-        256.0,
-        64.0,
-    );
-    batch.sprite_region(
-        atlas,
-        crate::title_edition::SPRITE,
-        [(w / 2.0).floor() - 64.0, 30.0 + 44.0 - 7.0, 128.0, 14.0],
-        128.0,
-        16.0,
-    );
+/// Valtic's in-game guest UI is never treated as an authenticated game.
+/// The actual game process is separately built and the launcher checks this marker.
+fn valtic_guest_menu() -> bool {
+    std::env::var("VALTIC_GUEST_MODE").as_deref()
+        == Ok("VALTIC_GUEST_LOCK_SUPPORTED_2026V1")
 }
+
+/// Valtic's genuine in-game title screen; drawn with the same HUD renderer
+/// as Minecraft's other menus. No fake launcher preview panel or browser UI.
+/// The panorama is still the game renderer's background; these translucent
+/// overlays retain it while giving Valtic its own cherry blossom styling.
+fn draw_valtic_title(atlas: &HudAtlas, batch: &mut HudBatch, w: f32, h: f32, elapsed: f32) {
+    let cx = (w / 2.0).floor();
+    // Soften the vanilla panorama with a plum / sakura-coloured cinematic veil.
+    batch.fill(atlas, 0.0, 0.0, w, h, rgba(25, 10, 35, 72));
+    // Deliberately understated glass card, matching the launcher.
+    let x = cx - 146.0;
+    batch.fill(atlas, x, 13.0, 292.0, 86.0, rgba(23, 14, 33, 198));
+    batch.fill(atlas, x, 13.0, 292.0, 1.0, rgba(246, 137, 189, 218));
+    batch.fill(atlas, x, 98.0, 292.0, 1.0, rgba(246, 137, 189, 138));
+    batch.fill(atlas, x, 14.0, 1.0, 84.0, rgba(246, 137, 189, 130));
+    batch.fill(atlas, x + 291.0, 14.0, 1.0, 84.0, rgba(246, 137, 189, 130));
+    batch.fill(atlas, cx - 102.0, 67.0, 204.0, 1.0, rgba(255, 145, 195, 150));
+
+    // Scale the in-game bitmap font for a clean, non-AI, bold Valtic wordmark.
+    let wordmark = "VALTIC";
+    let scale = 3.4f32;
+    let text_width = HudBatch::text_width(atlas, wordmark);
+    let start = batch.vertices.len();
+    batch.text(atlas, wordmark, 0.0, 0.0, rgba(255, 227, 241, 255), true);
+    for vertex in &mut batch.vertices[start..] {
+        vertex.pos[0] = cx - text_width * scale / 2.0 + vertex.pos[0] * scale;
+        vertex.pos[1] = 27.0 + vertex.pos[1] * scale;
+    }
+    let sub = "RUST-POWERED  •  CHERRY BLOSSOM EDITION";
+    let sub_w = HudBatch::text_width(atlas, sub);
+    batch.text(atlas, sub, cx - sub_w / 2.0, 76.0, rgba(255, 183, 215, 255), true);
+
+    // Subtle falling sakura petals, timed independently of menu interaction.
+    // They travel in front of the world panorama but behind menu buttons.
+    for i in 0..22u32 {
+        let seed = i as f32;
+        let fall = (seed * 0.271 + elapsed * (0.022 + (i % 5) as f32 * 0.004)).fract();
+        let drift = (elapsed * 0.7 + seed * 1.97).sin() * 7.0;
+        let px = (seed * 79.31).rem_euclid(w.max(1.0)) + drift;
+        let py = fall * (h + 25.0) - 12.0;
+        // Keep the centre of the game menu readable.
+        if (px - cx).abs() < 115.0 && (py - h / 2.0).abs() < 100.0 {
+            continue;
+        }
+        batch.fill(atlas, px, py, 4.0, 2.0, rgba(255, 164, 199, 145));
+        batch.fill(atlas, px + 1.0, py - 1.0, 2.0, 4.0, rgba(253, 192, 225, 110));
+    }
+
+    if valtic_guest_menu() {
+        let notice = "GUEST MODE  •  SIGN IN WITH MICROSOFT TO PLAY";
+        let notice_w = HudBatch::text_width(atlas, notice);
+        let y = (h / 4.0).floor() + 174.0;
+        if y < h - 24.0 {
+            batch.fill(atlas, cx - notice_w / 2.0 - 9.0, y - 5.0, notice_w + 18.0, 18.0, rgba(35, 19, 43, 200));
+            batch.text(atlas, notice, cx - notice_w / 2.0, y, rgba(255, 182, 211, 255), true);
+        }
+    }
+}
+
 
 /// `OptimizeWorldScreen.DIMENSION_COLORS`.
 fn dimension_color(level: &str) -> u32 {
@@ -1894,31 +1941,31 @@ impl Title {
             Mode::Main => {
                 let cx = (w / 2.0).floor();
                 let y = (h / 4.0).floor() + 48.0;
+                let guest = valtic_guest_menu();
                 let mut buttons = vec![
                     b(
                         cx - 100.0,
                         y,
                         200.0,
-                        &lang::get_or("menu.singleplayer", "Singleplayer"),
-                        true,
+                        if guest { "Singleplayer  •  Sign in" } else { "Singleplayer" },
+                        !guest,
                         1,
                     ),
                     b(
                         cx - 100.0,
                         y + 24.0,
                         200.0,
-                        &lang::get_or("menu.multiplayer", "Multiplayer"),
-                        self.allows_multiplayer,
+                        if guest { "Multiplayer  •  Sign in" } else { "Multiplayer" },
+                        self.allows_multiplayer && !guest,
                         4,
                     ),
                     b(
                         cx - 100.0,
                         y + 48.0,
                         200.0,
-                        &lang::get_or("menu.online", "Minecraft Realms"),
-                        // TitleScreen.createNormalMenuOptions: Realms is off when
-                        // multiplayer is.
-                        self.allows_multiplayer,
+                        if guest { "Realms  •  Sign in" } else { "Minecraft Realms" },
+                        // No Realms access without verified Microsoft authentication.
+                        self.allows_multiplayer && !guest,
                         8,
                     ),
                     b(
@@ -1960,7 +2007,7 @@ impl Title {
                         y + 72.0,
                         20.0,
                         &lang::get_or(key, plain),
-                        id != 5 || crate::net::joins_friends(),
+                        id != 5 || (!guest && crate::net::joins_friends()),
                         id,
                     );
                     button.icon = Some((icon, 15.0));
@@ -2693,41 +2740,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         }
         match &self.mode {
             Mode::Main => {
-                draw_logo(atlas, batch, w);
-                if !hide_splash && let Some(splash) = self.splash.as_deref() {
-                    let tw = HudBatch::text_width(atlas, splash);
-                    let start = batch.vertices.len();
-                    batch.text(
-                        atlas,
-                        splash,
-                        -(tw / 2.0).floor(),
-                        -8.0,
-                        rgba(255, 255, 0, 255),
-                        true,
-                    );
-                    let scale = (1.8
-                        - (self.started.elapsed().as_secs_f32() * std::f32::consts::TAU)
-                            .sin()
-                            .abs()
-                            * 0.1)
-                        * 100.0
-                        / (tw + 32.0);
-                    let (sin, cos) = (-20.0f32).to_radians().sin_cos();
-                    for v in &mut batch.vertices[start..] {
-                        let [x, y] = v.pos;
-                        v.pos = [
-                            w / 2.0 + 123.0 + scale * (x * cos - y * sin),
-                            69.0 + scale * (x * sin + y * cos),
-                        ];
-                    }
-                }
-                let version = format!("Horizon {} (Rust)", horizon_core::VANILLA_VERSION);
+                draw_valtic_title(atlas, batch, w, h, self.started.elapsed().as_secs_f32());
+                let version = format!("Valtic {}  |  Built in Rust", horizon_core::VANILLA_VERSION);
                 batch.text(atlas, &version, 2.0, h - 10.0, u32::MAX, true);
-                // A nightly names its build in the top-left corner, the one spot no button reaches at any GUI
-                // scale, so screenshots and reports say which build they come from.
-                if let Some(nightly) = horizon_core::release::nightly_label() {
-                    batch.text(atlas, &nightly, 2.0, 2.0, u32::MAX, true);
-                }
                 let notice = &lang::get_or(
                     "horizon.title.not_affiliated",
                     "Not affiliated with Mojang or Microsoft",
@@ -3397,8 +3412,31 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             } else {
                 "gui/sprites/widget/button"
             };
-            // Nine-slice approximation: left and right halves of the 200-wide sprite.
-            if let Some(r) = atlas.sprites.get(sprite).copied() {
+            if matches!(self.mode, Mode::Main) {
+                // Native cherry-blossom glass buttons instead of Minecraft's grey stone texture.
+                // Disabled guest buttons remain visibly present but cannot be activated.
+                let bg = if !b.enabled {
+                    rgba(30, 22, 38, 198)
+                } else if hover {
+                    rgba(178, 67, 119, 242)
+                } else {
+                    rgba(49, 28, 55, 214)
+                };
+                let border = if hover {
+                    rgba(255, 180, 220, 244)
+                } else {
+                    rgba(225, 135, 186, 158)
+                };
+                batch.fill(atlas, b.x, b.y, b.w, 20.0, bg);
+                batch.fill(atlas, b.x, b.y, b.w, 1.0, border);
+                batch.fill(atlas, b.x, b.y + 19.0, b.w, 1.0, border);
+                batch.fill(atlas, b.x, b.y, 1.0, 20.0, border);
+                batch.fill(atlas, b.x + b.w - 1.0, b.y, 1.0, 20.0, border);
+                if b.w > 30.0 && b.enabled {
+                    batch.fill(atlas, b.x + 3.0, b.y + 4.0, 2.0, 12.0, rgba(255, 169, 214, 215));
+                }
+            } else if let Some(r) = atlas.sprites.get(sprite).copied() {
+                // Other game menus retain their normal Minecraft button styles.
                 let half = b.w / 2.0;
                 let mut left = r;
                 left.u1 = r.u0 + (r.u1 - r.u0) * (half / r.w as f32);
@@ -3409,6 +3447,8 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
             let color = if b.enabled {
                 u32::MAX
+            } else if matches!(self.mode, Mode::Main) {
+                rgba(220, 161, 196, 240)
             } else {
                 rgba(160, 160, 160, 255)
             };
