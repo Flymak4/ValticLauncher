@@ -712,7 +712,8 @@ pub fn draw_boot_log(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {
     'lines: for text in logs.iter().rev() {
         // Keep engine diagnostics intact in the log file, but show Valtic's
         // own branding during the game's loading sequence.
-        let branded = text.replace("Horizon", "Valtic").replace("horizon", "valtic");
+        let branded = text.replace("Horizon", "Valtic").replace("horizon", "valtic")
+            .replace("Nightly", "Build").replace("nightly", "build");
         let chunks = wrapping_lines(&ui, Face::Mono, size, &branded, max_w);
         for chunk in chunks.iter().rev() {
             if drawn == max_rows {
