@@ -499,7 +499,14 @@ impl Launcher {
                         main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.picker.open = false;
                             this.play_when_prepared = this.selected().cloned();
-                            this.prepare(backend::MinecraftFrom::Install);
+                            // First-run Play is the install button: download from
+                            // Mojang when no local Minecraft install is configured.
+                            let from = if this.settings.minecraft_dir.is_none() {
+                                backend::MinecraftFrom::Mojang
+                            } else {
+                                backend::MinecraftFrom::Install
+                            };
+                            this.prepare(from);
                             cx.notify();
                         }))
                     }
