@@ -67,6 +67,7 @@ jobs:
             Cargo.toml Cargo.lock
             crates mods third_party tools xtask tests
             .cargo native-hooks.json research-lock.json
+            ':(exclude)tools/pad_glyphs/gen.py'
           )
           git fetch --no-tags --filter=blob:none --depth=1 horizon-upstream "$base"
           git switch -c automation/horizon-engine-sync
