@@ -265,7 +265,7 @@ jobs:
           # Publish the game's first-party release separately from the launcher.
           # Game updates follow the verified Horizon source merged into this fork,
           # while clients download ONLY the Valtic-built game archive.
-          $gameTag = "v0.2.$env:GITHUB_RUN_NUMBER"
+          $gameTag = "v1.0.$env:GITHUB_RUN_NUMBER"
           $gameRelease = gh release view $gameTag --repo $destination --json tagName --jq .tagName 2>$null
           if ($LASTEXITCODE -eq 0 -and $gameRelease -eq $gameTag) {
             gh release upload $gameTag 'dist/valtic-windows-x64.zip' --clobber --repo $destination
