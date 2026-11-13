@@ -107,7 +107,6 @@ impl Launcher {
             .unwrap_or("Minecraft survival · Java & Bedrock");
 
         div()
-            .id("valtic-smp-server-card")
             .absolute().top(px(23.)).left(px(26.))
             .w(px(if self.window_width < 850. { 328. } else { 440. }))
             .rounded(px(20.))
