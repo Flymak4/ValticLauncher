@@ -266,7 +266,8 @@ jobs:
           # Game updates follow the verified Horizon source merged into this fork,
           # while clients download ONLY the Valtic-built game archive.
           $gameTag = "v0.2.$env:GITHUB_RUN_NUMBER"
-          if (gh release view $gameTag --repo $destination *> $null) {
+          $gameRelease = gh release view $gameTag --repo $destination --json tagName --jq .tagName 2>$null
+          if ($LASTEXITCODE -eq 0 -and $gameRelease -eq $gameTag) {
             gh release upload $gameTag 'dist/valtic-windows-x64.zip' --clobber --repo $destination
           } else {
             gh release create $gameTag 'dist/valtic-windows-x64.zip' --repo $destination --target $target --title "Valtic Client 26.3 ($gameTag)" --notes "Official Valtic Rust game build, based on the continuously synced Horizon engine. Valtic Cherry Grove panorama and startup included. Installed automatically by Valtic Launcher." --latest=false
