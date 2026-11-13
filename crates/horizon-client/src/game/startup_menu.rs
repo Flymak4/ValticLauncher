@@ -58,7 +58,9 @@ pub(super) struct StartupMenu {
 
 impl StartupMenu {
     pub fn new(options: &Options, pack_error: Option<&str>) -> Result<Self> {
-        let pending = if let Some(address) = &options.server {
+        let pending = if crate::entry::guest_menu_only() {
+            None // Ignore --server and --world even when supplied explicitly.
+        } else if let Some(address) = &options.server {
             Some(PendingWorldEntry::Server {
                 address: address.clone(),
                 name: options.player_name(),
@@ -199,6 +201,10 @@ impl StartupMenu {
     }
 
     fn queue_entry(&mut self, action: Action, player_name: String) {
+        if crate::entry::guest_menu_only() {
+            // Includes keyboard/controller actions; no world or server may be queued.
+            return;
+        }
         let entry = match action {
             Action::Play { folder } => PendingWorldEntry::Local {
                 folder,
@@ -766,6 +772,14 @@ impl Loading {
     }
 
     fn menu_action(&mut self, event_loop: &dyn EventLoopCtl, action: Action) {
+        if crate::entry::guest_menu_only()
+            && matches!(&action, Action::Play { .. } | Action::Create { .. } | Action::Connect { .. })
+        {
+            if let Some(title) = self.menu.title.as_mut() {
+                title.failed("Sign in with Microsoft in Valtic Launcher to play Minecraft.".into());
+            }
+            return;
+        }
         match action {
             Action::Quit => event_loop.exit(),
             Action::Options => self.open_menu_options(Page::Main),

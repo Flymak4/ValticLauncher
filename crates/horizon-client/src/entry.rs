@@ -1,6 +1,13 @@
 //! Startup shared by the gameplay library and its executable.
 use crate::{crash, game, logging};
 
+/// A narrow, dedicated mode for the Valtic Launcher: only the title screen is
+/// available. Never trust an unauthenticated session for world or network entry.
+/// The marker is intentionally also checked by the launcher in the guest binary.
+pub fn guest_menu_only() -> bool {
+    std::env::var("VALTIC_GUEST_MODE").as_deref() == Ok("VALTIC_GUEST_LOCK_SUPPORTED_2026V1")
+}
+
 /// Start the game. The executable supplies the allocator and retains the mod API marker.
 pub fn main() {
     main_with(Default::default());

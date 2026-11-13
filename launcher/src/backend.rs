@@ -19,6 +19,14 @@ pub const VALTIC_UPDATE_REPO: &str = match option_env!("VALTIC_UPDATE_REPO") {
     _ => "Flymak4/ValticLauncher",
 };
 pub const VALTIC_UPDATE_ASSET: &str = "valtic-launcher-windows-x64.zip";
+/// The guest-only game is a separate restricted game executable shipped as an
+/// automatic release asset. Players still download just one launcher setup EXE.
+pub const VALTIC_GUEST_ASSET: &str = "valtic-guest-client.exe";
+pub const VALTIC_GUEST_MARKER: &str = "VALTIC_GUEST_LOCK_SUPPORTED_2026V1";
+pub const VALTIC_BUILD_TAG: &str = match option_env!("HORIZON_LAUNCHER_TAG") {
+    Some(tag) => tag,
+    None => "",
+};
 
 pub const README_URL: &str = "https://github.com/horizon-rust/horizon/blob/main/launcher/README.md";
 /// The players' page on connecting an AI agent (the website's docs/agents.md).
@@ -2937,6 +2945,89 @@ fn strip_launcher_render_env(cmd: &mut Command) {
     }
 }
 
+/// Fetch a restricted, matching game build on demand. Never launch an old
+/// unrestricted Horizon executable for an unauthenticated player.
+fn guest_game_binary() -> Result<PathBuf, String> {
+    if VALTIC_BUILD_TAG.is_empty() {
+        return Err("Guest mode needs an official Valtic Launcher build.".into());
+    }
+    let dir = data_dir().join("valtic-guest").join(VALTIC_BUILD_TAG);
+    let binary = dir.join(VALTIC_GUEST_ASSET);
+    let marker = VALTIC_GUEST_MARKER.as_bytes();
+    let supports_lock = |path: &Path| -> bool {
+        fs::read(path).ok().is_some_and(|bytes| {
+            bytes.starts_with(b"MZ")
+                && bytes.len() > 1024 * 1024
+                && bytes.windows(marker.len()).any(|part| part == marker)
+        })
+    };
+    if supports_lock(&binary) {
+        return Ok(binary);
+    }
+    fs::create_dir_all(&dir).map_err(|e| format!("Guest game folder: {e}"))?;
+    let url = format!(
+        "https://github.com/{}/releases/download/{}/{}",
+        VALTIC_UPDATE_REPO, VALTIC_BUILD_TAG, VALTIC_GUEST_ASSET
+    );
+    let response = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .get(&url)
+        .call()
+        .map_err(|e| format!("Guest game download unavailable: {e}"))?;
+    // The asset is our own signed-in workflow's published game executable,
+    // rather than an arbitrary Minecraft binary or the owner's installed game.
+    const LIMIT: u64 = 500 * 1024 * 1024;
+    if response.header("Content-Length")
+        .and_then(|v| v.parse::<u64>().ok())
+        .is_some_and(|size| size > LIMIT)
+    {
+        return Err("Guest game download is unexpectedly large.".into());
+    }
+    let temporary = dir.join("valtic-guest-download.tmp");
+    let outcome = (|| -> Result<(), String> {
+        let mut output = fs::File::create(&temporary).map_err(|e| e.to_string())?;
+        let received = std::io::copy(&mut response.into_reader().take(LIMIT + 1), &mut output)
+            .map_err(|e| format!("Guest game download: {e}"))?;
+        drop(output);
+        if received > LIMIT || !supports_lock(&temporary) {
+            return Err("Guest game is missing its required gameplay lock; refusing to open it.".into());
+        }
+        if binary.exists() {
+            fs::remove_file(&binary).map_err(|e| e.to_string())?;
+        }
+        fs::rename(&temporary, &binary).map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    if outcome.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    outcome.map(|()| binary)
+}
+
+/// An actual native Minecraft-style game window, restricted to its title UI.
+/// Guest Play never forwards server addresses, world paths or account sessions.
+pub fn guest_client_command(tag: &str) -> Result<Command, String> {
+    if !is_prepared(tag) {
+        return Err("Install or prepare this game version while signed in before using guest mode.".into());
+    }
+    let executable = guest_game_binary()?;
+    let home = game_home();
+    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(executable);
+    #[cfg(windows)]
+    crate::windows_runtime::mark(&mut cmd, &version_dir(tag));
+    strip_launcher_render_env(&mut cmd);
+    cmd.current_dir(&home)
+        .env("HORIZON_HOME", &home)
+        .env_remove("HORIZON_ACCOUNT_SESSIONS")
+        .env_remove("HORIZON_LAUNCHER_EXE")
+        .env("VALTIC_GUEST_MODE", VALTIC_GUEST_MARKER)
+        .arg("--resources")
+        .arg(resources(tag));
+    Ok(cmd)
+}
+
 pub fn client_command(tag: &str) -> Command {
     let home = game_home();
     let _ = fs::create_dir_all(&home);
@@ -4305,6 +4396,8 @@ pub enum Msg {
     /// The owner gate's answer for the game about to start: the selected account's session
     /// file (none = offline) and why it plays offline, if it does.
     Session(Result<crate::account::GameSession, crate::account::NoOwner>),
+    /// Restricted game executable ready; no session or multiplayer arguments.
+    GuestClient(String, Result<Command, String>),
     /// A modpack step's line (`modpacks`).
     PackLine(String),
     /// A modpack step ended: the pack as it now is.

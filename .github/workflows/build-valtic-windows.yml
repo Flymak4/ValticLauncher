@@ -23,7 +23,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       # Keep the CRT with the executable, like Horizon's upstream Windows release.
       RUSTFLAGS: -C target-feature=+crt-static
@@ -103,6 +103,12 @@ jobs:
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Could not generate the Valtic app icon' }
 
+      # Build the native game with the dedicated in-game guest restrictions.
+      # The player's download remains a single setup EXE; this secondary binary
+      # is fetched automatically by the launcher only for Guest Play.
+      - name: Compile restricted Valtic guest game
+        run: cargo build --release --locked --package horizon-client --bin horizon-client
+
       - name: Compile Valtic Launcher
         working-directory: launcher
         run: cargo build --release --locked --bin valtic-launcher
@@ -130,6 +136,15 @@ jobs:
             $stream.Dispose()
           }
           Write-Host "Verified $($binary.Name) ($([math]::Round($binary.Length / 1MB, 2)) MiB)"
+
+          # Restricted native game executable, published for the launcher's
+          # guest-only automatic download (not a second player download).
+          $guestExe = 'target/release/horizon-client.exe'
+          if (!(Test-Path $guestExe) -or (Get-Item $guestExe).Length -lt 1MB) {
+            throw 'Restricted Valtic guest game executable was not produced.'
+          }
+          New-Item -ItemType Directory -Path publish -Force | Out-Null
+          Copy-Item $guestExe 'publish/valtic-guest-client.exe'
 
           # A single directly downloadable EXE: its filename activates the built-in
           # setup wizard, which installs the launcher and supports future updates.
@@ -177,7 +192,7 @@ jobs:
           }
           # Exactly one player-facing download: the setup EXE.
           # The ZIP is required internally by the already-shipped in-app updater.
-          gh release create $tag 'publish/valtic-launcher-setup.exe' 'dist/valtic-launcher-windows-x64.zip' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. This is a direct Windows EXE download, with no ZIP or folder extraction. Existing settings, worlds and instances are preserved. The separate ZIP asset is used only by the automatic in-app updater." --latest
+          gh release create $tag 'publish/valtic-launcher-setup.exe' 'dist/valtic-launcher-windows-x64.zip' 'publish/valtic-guest-client.exe' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. This is a direct Windows EXE download, with no ZIP or folder extraction. Existing settings, worlds and instances are preserved. The separate ZIP asset is used only by the automatic in-app updater." --latest
           if ($LASTEXITCODE -ne 0) { throw "Could not publish launcher release $tag to $destination." }
           "### Download Valtic Launcher (single EXE)" >> $env:GITHUB_STEP_SUMMARY
           $exeUrl = "https://github.com/$destination/releases/download/$([uri]::EscapeDataString($tag))/valtic-launcher-setup.exe"

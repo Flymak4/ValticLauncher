@@ -478,6 +478,7 @@ impl Launcher {
             None => {
                 let (label, icon) = match &update {
                     Some(_) => (tr("Update"), "download-04"),
+                    None if self.owner != Some(true) => ("Open Guest Menu", "play"),
                     None => (tr("Play"), "play"),
                 };
                 let press = play_press(ready, self.owner, false);

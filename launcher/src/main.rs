@@ -1290,6 +1290,21 @@ impl Launcher {
                         }
                     }
                 }
+                Msg::GuestClient(tag, command) => {
+                    if self.starting_client.as_deref() != Some(&tag) {
+                        continue;
+                    }
+                    self.starting_client = None;
+                    match command.and_then(|cmd| backend::spawn(Job::Client, cmd, self.tx.clone())) {
+                        Ok(running) => {
+                            self.client = Some(running);
+                            self.client_home = Some(backend::game_home());
+                            self.client_run = None; // A locked menu is not play time.
+                            self.step_aside(cx);
+                        }
+                        Err(error) => self.client_error = Some(error),
+                    }
+                }
                 Msg::Session(session) => {
                     self.load_auth_statuses(false);
                     if let Some(tag) = self.starting_client.take() {
@@ -1871,6 +1886,27 @@ impl Launcher {
     }
 
     fn play(&mut self) {
+        if self.owner != Some(true) {
+            // No unauthenticated gameplay, including quick-play servers and Java
+            // instances; only our separately built, hard-locked native menu.
+            self.quick_play = None;
+            self.joining = None;
+            self.starting_pack = None;
+            let Some(tag) = self.selected().cloned() else {
+                self.client_error = Some("Select a Valtic game version to open the guest menu.".into());
+                return;
+            };
+            if !self.can_start(&tag) {
+                self.client_error = Some("Prepare the selected game version before guest mode.".into());
+                return;
+            }
+            if self.selected_instance().is_some_and(|instance| instance.java.is_some()) {
+                self.client_error = Some("Guest mode is only available with the Valtic native game version.".into());
+                return;
+            }
+            self.start_guest_client(tag);
+            return;
+        }
         let java = self
             .selected_instance()
             .filter(|i| i.java.is_some())
@@ -1937,6 +1973,21 @@ impl Launcher {
                 (horizon_launcher::launch::wrap(cmd, &instance.launch), vars)
             });
             let _ = tx.send(Msg::JavaGame(instance.id, instance.home, cmd));
+        });
+    }
+
+    /// Download and launch the restricted native title screen without player credentials.
+    /// Never pass an existing client's command line or a player session to this mode.
+    fn start_guest_client(&mut self, tag: String) {
+        self.client_error = None;
+        self.crash = None;
+        self.prepare_log.clear();
+        self.client_started = Some(std::time::SystemTime::now());
+        self.starting_client = Some(tag.clone());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let command = backend::guest_client_command(&tag);
+            let _ = tx.send(Msg::GuestClient(tag, command));
         });
     }
 

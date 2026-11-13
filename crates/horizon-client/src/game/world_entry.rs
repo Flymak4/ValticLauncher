@@ -4,6 +4,14 @@ use super::*;
 
 impl Game<'_> {
     pub(super) fn defer_world_entry(&mut self, entry: PendingWorldEntry) -> Result<bool> {
+        if crate::entry::guest_menu_only() {
+            // A second guard after startup menu actions, before world generation/networking.
+            let _ = entry;
+            if let Some(title) = self.title.as_mut() {
+                title.failed("Sign in with Microsoft in Valtic Launcher to play.".into());
+            }
+            return Ok(true);
+        }
         self.poll_world_rest()?;
         if self.rest_loader.is_none() {
             return Ok(false);
@@ -24,6 +32,12 @@ impl Game<'_> {
     }
 
     pub(super) fn resume_world_entry(&mut self) -> Result<()> {
+        if crate::entry::guest_menu_only() && self.pending_entry.take().is_some() {
+            if let Some(title) = self.title.as_mut() {
+                title.failed("Sign in with Microsoft in Valtic Launcher to play.".into());
+            }
+            return Ok(());
+        }
         self.poll_integrated_start()?;
         self.poll_world_rest()?;
         self.poll_world_creation();

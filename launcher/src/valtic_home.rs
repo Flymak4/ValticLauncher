@@ -315,9 +315,8 @@ impl Launcher {
             .into_any_element()
     }
 
-    /// Unauthenticated visitors can explore a clearly labelled, non-interactive
-    /// Minecraft-style menu preview. This never starts the game or creates an
-    /// offline game session; actual play continues through Microsoft ownership checks.
+    /// Tell unsigned visitors about restricted game access; Play opens the
+    /// actual guest-locked native game once its assets are prepared.
     fn valtic_guest_preview(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let entries = ["Singleplayer", "Multiplayer", "Minecraft Realms"];
         let mut menu = div().flex().flex_col().gap(px(8.));
@@ -338,9 +337,9 @@ impl Launcher {
             .bg(ui::color(0x1d1724).opacity(0.94))
             .border_1().border_color(ui::color(0xf7b8d8).opacity(0.24))
             .child(ui::text(20., FontWeight::BOLD, ink::FULL)
-                .child("Minecraft Menu Preview"))
+                .child("Guest Minecraft Menu"))
             .child(ui::text(13., FontWeight::NORMAL, ink::BODY)
-                .child("Explore the menu layout without an account. This is a launcher preview, not the running Minecraft game."))
+                .child("Open the real game menu with Guest Play. Worlds, servers and Realms stay locked until you sign in with Microsoft. A prepared Valtic version is required."))
             .child(menu)
             .child(div().id("valtic-guest-sign-in")
                 .cursor_pointer()
