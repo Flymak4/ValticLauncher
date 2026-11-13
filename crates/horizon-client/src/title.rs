@@ -100,6 +100,22 @@ fn valtic_guest_menu() -> bool {
         == Ok("VALTIC_GUEST_LOCK_SUPPORTED_2026V1")
 }
 
+/// Render the branded Valtic wordmark on the main menu AND onboarding.
+/// Accessibility onboarding still calls `draw_logo`, so keep this shared entry
+/// point instead of deleting the helper during future title redesigns.
+fn draw_logo(atlas: &HudAtlas, batch: &mut HudBatch, w: f32) {
+    let wordmark = "VALTIC";
+    let scale = 3.4f32;
+    let cx = (w / 2.0).floor();
+    let text_width = HudBatch::text_width(atlas, wordmark);
+    let start = batch.vertices.len();
+    batch.text(atlas, wordmark, 0.0, 0.0, rgba(255, 227, 241, 255), true);
+    for vertex in &mut batch.vertices[start..] {
+        vertex.pos[0] = cx - text_width * scale / 2.0 + vertex.pos[0] * scale;
+        vertex.pos[1] = 27.0 + vertex.pos[1] * scale;
+    }
+}
+
 /// Valtic's genuine in-game title screen; drawn with the same HUD renderer
 /// as Minecraft's other menus. No fake launcher preview panel or browser UI.
 /// The panorama is still the game renderer's background; these translucent
@@ -117,16 +133,8 @@ fn draw_valtic_title(atlas: &HudAtlas, batch: &mut HudBatch, w: f32, h: f32, ela
     batch.fill(atlas, x + 291.0, 14.0, 1.0, 84.0, rgba(246, 137, 189, 130));
     batch.fill(atlas, cx - 102.0, 67.0, 204.0, 1.0, rgba(255, 145, 195, 150));
 
-    // Scale the in-game bitmap font for a clean, non-AI, bold Valtic wordmark.
-    let wordmark = "VALTIC";
-    let scale = 3.4f32;
-    let text_width = HudBatch::text_width(atlas, wordmark);
-    let start = batch.vertices.len();
-    batch.text(atlas, wordmark, 0.0, 0.0, rgba(255, 227, 241, 255), true);
-    for vertex in &mut batch.vertices[start..] {
-        vertex.pos[0] = cx - text_width * scale / 2.0 + vertex.pos[0] * scale;
-        vertex.pos[1] = 27.0 + vertex.pos[1] * scale;
-    }
+    // Reuse the static logo on onboarding and the animated main menu.
+    draw_logo(atlas, batch, w);
     let sub = "RUST-POWERED  •  CHERRY BLOSSOM EDITION";
     let sub_w = HudBatch::text_width(atlas, sub);
     batch.text(atlas, sub, cx - sub_w / 2.0, 76.0, rgba(255, 183, 215, 255), true);
@@ -2701,7 +2709,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         items: Option<&crate::item_render::ItemRenderer>,
         batch: &mut HudBatch,
         cursor: (f32, f32),
-        hide_splash: bool,
+        _hide_splash: bool,
         hide_server_address: bool,
     ) {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
