@@ -1,15 +1,50 @@
-# Microsoft sign-in setup for Valtic Launcher
+# Microsoft sign-in for Valtic Launcher
 
-Valtic uses Microsoft's device-code sign-in and requires a Microsoft account that owns Minecraft: Java Edition. It never asks players for their Microsoft password.
+Valtic uses Microsoft's real **device-code sign-in** (Microsoft browser, Xbox Live, Minecraft
+Services). Players never enter a Microsoft password into Valtic. The verified Minecraft session
+is passed to **Valtic's own game build**, not Horizon's downloadable launcher or game binary.
 
-## One-time developer setup
+## Configure a Valtic application
 
-1. In [Microsoft Entra](https://entra.microsoft.com/), register a **public client** application named **Valtic Launcher** that accepts personal Microsoft accounts.
-2. Under Authentication, enable **Allow public client flows** (device-code sign-in). No client secret is needed. Copy the **Application (client) ID** (a GUID).
-3. Apply for Minecraft authentication app-ID review using the [official review link](https://aka.ms/mce-reviewappid). New registrations can be refused by Minecraft Services until approved.
-4. In GitHub, open **Flymak4/ValticLauncher → Settings → Secrets and variables → Actions → Variables**. Add `VALTIC_MSA_CLIENT_ID` with that GUID.
-5. Re-run **Actions → Build Valtic Launcher (Windows)**. The build checks the configured ID rather than publishing a launcher that cannot sign in.
+1. In [Microsoft Entra](https://entra.microsoft.com/), register a public-client application
+   **Valtic Launcher** that permits personal Microsoft accounts.
+2. Enable **Allow public client flows**. Copy its **Application (client) ID** (a GUID). Do not
+   put a client secret in a desktop app.
+3. Submit the ID for Minecraft Services review using [Minecraft's app review](https://aka.ms/mce-reviewappid).
+   Successful Microsoft sign-in alone does not guarantee Minecraft Services access.
+4. In **Flymak4/ValticLauncher → Settings → Secrets and variables → Actions → Variables**,
+   configure `VALTIC_MSA_CLIENT_ID` with Valtic's own client ID.
+5. Until approved, leave `VALTIC_MSA_APPROVED` set to `false`. After Microsoft/Minecraft
+   approve Valtic, set this variable to `true`, then rebuild/publish the launcher.
 
-The client ID is public information, not a password. Do **not** put a client secret in the desktop launcher. A valid GUID passes build validation, but actual Microsoft sign-in and Minecraft API access still require proper registration and any required approval.
+## Optional temporary authentication while waiting
 
-For local builds, set `VALTIC_MSA_CLIENT_ID` before running Cargo. Internal compatibility with the previous `HORIZON_MSA_CLIENT_ID` environment variable remains, but Valtic's supported build variable is `VALTIC_MSA_CLIENT_ID`.
+You may set `VALTIC_TEMP_MSA_CLIENT_ID` to another public-client application ID **only if its
+owner has explicitly permitted Valtic to use it and this use is allowed by Microsoft/Minecraft**.
+Do not copy Horizon's client ID from source code or impersonate another launcher's app registration.
+
+When an authorized temporary ID exists and `VALTIC_MSA_APPROVED` is not `true`, Valtic
+automatically selects the temporary ID for the same Microsoft device-code flow. All the launcher
+UI, saved Minecraft instances, installed mods and game binaries stay Valtic's. Without an
+authorized temporary ID, Valtic's own ID is used (and Minecraft Services can deny access until
+its approval).
+
+| GitHub Actions variable | While waiting | After Valtic approval |
+| --- | --- | --- |
+| `VALTIC_MSA_CLIENT_ID` | Valtic's registration | Same registration |
+| `VALTIC_TEMP_MSA_CLIENT_ID` | Authorized temporary ID, if available | May remain for fallback |
+| `VALTIC_MSA_APPROVED` | `false` | `true` |
+
+The new build automatically prefers Valtic's client ID when that flag becomes true. Players
+whose saved Microsoft refresh tokens belong to a different app are asked to sign in again; the
+launcher does not attempt to redeem a temporary app's token with Valtic's app ID. Other saved
+instances, installed mods, account names, and local game data are preserved.
+
+**Approval is not detectable automatically from inside the launcher.** The publisher must
+confirm it and set `VALTIC_MSA_APPROVED=true` before publishing the transition update.
+This is *not* a way to bypass Microsoft authentication, Minecraft ownership, or application
+approval.
+
+Local builds can set the same variables before running Cargo. The legacy
+`HORIZON_MSA_CLIENT_ID` is read only for compatibility with explicitly authorized
+configurations; Valtic builds no longer embed a third-party ID by default.
