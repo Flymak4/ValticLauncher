@@ -1894,6 +1894,48 @@ impl Launcher {
         self.download_seen = None;
     }
 
+    /// One Play action after choosing an instance in the launcher's picker. The chosen
+    /// instance owns its game version; never prepare the previously selected version.
+    /// Java downloads its own files on launch, while Valtic's native client prepares once.
+    fn play_selected_or_prepare(&mut self) {
+        if self.client.is_some() || self.starting_client.is_some() || self.preparing {
+            return;
+        }
+        if self.selected_instance().is_some_and(|i| i.java.is_some()) {
+            if self.owner == Some(true) {
+                self.play();
+            } else {
+                self.sign_in_to_play();
+            }
+            return;
+        }
+        let Some(tag) = self.selected().cloned() else {
+            self.client_error = Some(tr("Install a Valtic game version before playing.").to_string());
+            self.go(Page::Versions);
+            return;
+        };
+        if !backend::is_prepared(&tag) {
+            if self.owner != Some(true) {
+                self.client_error = Some(
+                    tr("Sign in with a Minecraft account before preparing this version.").to_string(),
+                );
+                self.sign_in_to_play();
+                return;
+            }
+            self.play_when_prepared = Some(tag);
+            // The first Play prepares the selected instance's missing files automatically,
+            // exactly as the old single Play button did.
+            let from = if self.settings.minecraft_dir.is_none() {
+                backend::MinecraftFrom::Mojang
+            } else {
+                backend::MinecraftFrom::Install
+            };
+            self.prepare(from);
+            return;
+        }
+        self.play();
+    }
+
     fn play(&mut self) {
         if self.owner != Some(true) {
             // No unauthenticated gameplay, including quick-play servers and Java
