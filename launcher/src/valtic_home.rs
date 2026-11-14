@@ -158,11 +158,20 @@ impl Launcher {
         let compact = self.window_width < 1050.;
 
         let server_card = self.valtic_server_card();
+        // This is Valtic's bundled, real Minecraft cherry-grove artwork. Decode it once
+        // through the image cache rather than constructing new GPU textures each frame.
+        let cherry_backdrop = self.icon_image(
+            "valtic:cherry-grove-backdrop".into(),
+            1400.,
+            true,
+            || Some(include_bytes!("../assets/valtic/cherry_grove.jpg").to_vec()),
+        );
         let mut petals = div().absolute().top_0().left_0().size_full();
         for (i, (x, y, size)) in [
             (0.06, 39., 10.), (0.22, 112., 7.), (0.43, -18., 9.),
             (0.68, 49., 8.), (0.90, 78., 12.),
             (0.12, 275., 8.), (0.76, 355., 12.),
+            (0.34, 315., 6.), (0.55, 205., 9.), (0.84, 235., 7.),
         ].into_iter().enumerate() {
             let petal = div().absolute().left(gpui::relative(x)).top(px(y))
                 .w(px(size * 1.4)).h(px(size * 0.8))
@@ -217,13 +226,21 @@ impl Launcher {
 
         div().relative().w_full()
             .min_h(px(if compact { 535. } else { 690. }))
+            // Do not clip the Play chooser / version menus outside the hero.
             .flex().flex_col().items_center().justify_center()
             .px(px(14.)).py(px(32.))
+            .children(cherry_backdrop.map(|image| {
+                gpui::img(image)
+                    .absolute().top_0().left_0().size_full()
+                    .object_fit(gpui::ObjectFit::Cover)
+            }))
+            // A dark plum veil keeps the Valtic logo, server card and Play controls
+            // readable without masking the pink cherry biome in the photograph.
             .child(div().absolute().top_0().left_0().size_full()
                 .bg(gpui::linear_gradient(
                     90.,
-                    gpui::linear_color_stop(ui::color(0x241228).opacity(0.07), 0.),
-                    gpui::linear_color_stop(ui::color(0x1b0e22).opacity(0.37), 1.),
+                    gpui::linear_color_stop(ui::color(0x160b21).opacity(0.72), 0.),
+                    gpui::linear_color_stop(ui::color(0x160b21).opacity(0.82), 1.),
                 )))
             .child(petals)
             .child(server_card)

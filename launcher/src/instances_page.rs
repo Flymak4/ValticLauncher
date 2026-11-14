@@ -334,15 +334,24 @@ impl Launcher {
 
     /// Opens the dialog for a copy of the selected instance, named after it.
     pub(super) fn start_copy(&mut self) {
-        let Some(name) = self.selected_instance().map(|i| i.name.clone()) else {
+        let Some(source) = self.selected_instance().cloned() else {
             return;
         };
+        // Never offer a name which Save will immediately reject. A duplicate should keep
+        // the original Minecraft version, icon, mods and worlds without changing the original.
+        let base = format!("{} copy", source.name);
+        let mut name = base.clone();
+        let mut suffix = 2;
+        while self.instances.list.iter().any(|i| i.name.eq_ignore_ascii_case(&name)) {
+            name = format!("{base} {suffix}");
+            suffix += 1;
+        }
         self.open_instance_dialog(None);
-        self.servers
-            .text(Field::InstanceName)
-            .set(format!("{name} copy"));
+        self.servers.text(Field::InstanceName).set(name);
         if let Some(d) = &mut self.instances.dialog {
             d.copy = true;
+            d.icon = source.icon;
+            d.pin = source.version;
         }
     }
 

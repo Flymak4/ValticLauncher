@@ -263,8 +263,13 @@ impl Mods {
     /// How well a result runs: a Java mod's from its check once it has one. In a Java
     /// instance, a result was searched for its version and loader: installing checks the file.
     pub(super) fn support(&self, p: &Project) -> Support {
-        if self.java_for(p.kind).is_some() {
-            return Support::Works;
+        if let Some(target) = self.java_for(p.kind) {
+            // A vanilla Java instance can browse Modrinth's mods, but has nowhere
+            // to load their jars. Do not label those mods "Works" or offer Install.
+            return match target.folder(p.kind) {
+                Ok(_) => Support::Works,
+                Err(reason) => Support::No(reason),
+            };
         }
         let metadata = p.support();
         if p.kind != PackKind::Mod || p.source == SourceId::Horizon || !metadata.installable() {

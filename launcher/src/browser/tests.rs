@@ -99,7 +99,7 @@ fn data_packs_are_their_own_kind() {
 
     assert_eq!(
         modrinth::facets(&Query::new("", Kind::DataPack)),
-        r#"[["project_type:datapack"],["versions:26.3"]]"#
+        r#"[["all_project_types:datapack"],["versions:26.3"]]"#
     );
     // A data pack's hit says `mod`: the search for data packs marks it.
     let hit = serde_json::json!({
@@ -114,6 +114,17 @@ fn data_packs_are_their_own_kind() {
         (p.kind, p.page.as_str()),
         (Kind::DataPack, "https://modrinth.com/datapack/terralith")
     );
+    // Modrinth search returns primary project types ("mod" for older or hybrid
+    // projects), even when all_project_types includes a data-pack version.
+    let hybrid = serde_json::json!({
+        "project_id": "datapack-1", "project_type": "mod",
+        "all_project_types": ["mod", "datapack"],
+        "slug": "valley-biomes", "title": "Valley Biomes",
+        "categories": ["worldgen"], "versions": [GAME],
+    });
+    let pack = modrinth::parse_hit(&hybrid).unwrap().as_datapack();
+    assert_eq!(pack.kind, Kind::DataPack);
+    assert_eq!(pack.page, "https://modrinth.com/datapack/valley-biomes");
     assert_eq!(Kind::DataPack.folder(), None);
 }
 
