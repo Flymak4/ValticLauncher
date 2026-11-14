@@ -247,7 +247,7 @@ impl Launcher {
             // Deletion always requires a second, explicit confirmation.
             if context_open {
                 let busy = self.client.is_some() || self.starting_client.is_some();
-                let deletable = instance.kind != instances::Kind::Default && !busy;
+                let deletable = !busy;
                 let mut menu = ui::popover(225.)
                     .id(SharedString::from(format!("library-context-{}", instance.id)))
                     .absolute().top(px(15.)).right(px(9.))
@@ -324,11 +324,16 @@ impl Launcher {
                 }
                 if deletable {
                     let id = instance.id.clone();
+                    let label = if instance.kind == instances::Kind::Default {
+                        "Remove default from library…"
+                    } else {
+                        "Delete instance…"
+                    };
                     menu = menu.child(
                         ui::menu_row(
                             format!("library-delete-{}", instance.id),
                             "delete-02",
-                            "Delete instance…",
+                            label,
                             true,
                             &self.theme,
                         ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -337,11 +342,7 @@ impl Launcher {
                         })),
                     );
                 } else {
-                    let reason = if busy {
-                        "Close the game before deleting an instance."
-                    } else {
-                        "The default game folder cannot be deleted."
-                    };
+                    let reason = "Close the game before deleting an instance.";
                     menu = menu.child(ui::text(12., FontWeight::NORMAL, ink::NOTE)
                         .p(px(10.)).child(reason));
                 }
