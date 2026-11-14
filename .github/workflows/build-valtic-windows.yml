@@ -301,7 +301,7 @@ jobs:
 
           # Exactly one player-facing launcher download: the setup EXE.
           # The ZIP files are used internally by launcher / game auto-updates.
-          gh release create $tag 'publish/valtic-launcher-setup.exe' 'dist/valtic-launcher-windows-x64.zip' 'publish/valtic-guest-client.exe' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. This is a direct Windows EXE download, with no ZIP or folder extraction. Existing settings, worlds and instances are preserved. The separate ZIP asset is used only by the automatic in-app updater." --latest
+          gh release create $tag 'publish/valtic-launcher-setup.exe' 'dist/valtic-launcher-windows-x64.zip' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. This is a direct Windows EXE download, with no ZIP or folder extraction. Existing settings, worlds and instances are preserved. The separate ZIP asset is used only by the automatic in-app updater." --latest
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::error::Release upload blocked. Enable Settings > Actions > General > Workflow permissions > Read and write permissions, or configure VALTIC_RELEASE_TOKEN with Contents: Read and write access."
             "### Build compiled, but the release was blocked by GitHub permissions" >> $env:GITHUB_STEP_SUMMARY
