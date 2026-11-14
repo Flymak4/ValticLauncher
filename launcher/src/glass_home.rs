@@ -60,6 +60,7 @@ pub(super) enum HomeMenu {
     #[default]
     None,
     Play,
+    Instances,
     Folder,
 }
 
@@ -677,29 +678,21 @@ impl Launcher {
                         this.install_update();
                         cx.notify();
                     })),
-                    (None, PlayPress::Play) => {
-                        main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    // Play always asks which instance to launch. Selecting one then
+                    // prepares missing native files (or downloads Java) before starting.
+                    // The picker stays accessible while Valtic's own Microsoft app awaits
+                    // approval, even if that instance cannot be launched yet.
+                    (None, _) => main.on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                        if !this.closed_by_this_press(event) {
                             this.picker.open = false;
-                            this.play();
-                            cx.notify();
-                        }))
-                    }
-                    (None, PlayPress::PrepareThenPlay) => {
-                        main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.picker.open = false;
-                            this.play_when_prepared = this.selected().cloned();
-                            // First-run Play is the install button: download from
-                            // Mojang when no local Minecraft install is configured.
-                            let from = if this.settings.minecraft_dir.is_none() {
-                                backend::MinecraftFrom::Mojang
+                            this.home_menu = if this.home_menu == HomeMenu::Instances {
+                                HomeMenu::None
                             } else {
-                                backend::MinecraftFrom::Install
+                                HomeMenu::Instances
                             };
-                            this.prepare(from);
-                            cx.notify();
-                        }))
-                    }
-                    (None, PlayPress::Nothing) => main.opacity(0.5).cursor_default(),
+                        }
+                        cx.notify();
+                    })),
                 };
                 base.bg(accent)
                     .text_color(on_accent)
@@ -810,6 +803,60 @@ impl Launcher {
             }
             wrap = wrap.child(
                 deferred(div().absolute().top(px(TALL + 8.)).left_0().child(menu)).with_priority(1),
+            );
+        }
+        if self.home_menu == HomeMenu::Instances {
+            let mut menu = ui::popover(310.)
+                .id("play-instances-menu")
+                .occlude()
+                .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.home_menu = HomeMenu::None;
+                    this.menu_closed_at = Some(event.position);
+                    cx.notify();
+                }))
+                .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
+                    .px(px(12.)).py(px(8.))
+                    .child(tr("Choose an instance to play")));
+            // Ported modpacks have their own dedicated launch controls. Don't
+            // pretend they're ordinary native/Java instances in this picker.
+            for instance in self.instances.list.clone().into_iter().filter(|i| {
+                matches!(i.kind, instances::Kind::Default | instances::Kind::Own)
+            }) {
+                let note = match &instance.java {
+                    Some(java) => format!("Minecraft {}", java.minecraft),
+                    None => instance.version.as_ref().map_or_else(
+                        || tr("Latest Valtic build").to_string(),
+                        |tag| format!("Valtic {}", backend::game_version(tag)),
+                    ),
+                };
+                let to_play = instance.clone();
+                menu = menu.child(ui::menu_item(
+                    SharedString::from(format!("play-choose-{}", instance.id)),
+                    instance.name.clone().into(),
+                    note,
+                    false,
+                    &t,
+                ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.home_menu = HomeMenu::None;
+                    this.select_instance(&to_play);
+                    this.play_selected_or_prepare();
+                    cx.notify();
+                })));
+            }
+            menu = menu.child(ui::menu_row(
+                "play-create-instance",
+                "plus-sign",
+                tr("Create another instance"),
+                false,
+                &t,
+            ).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.home_menu = HomeMenu::None;
+                this.open_instance_dialog(None);
+                cx.notify();
+            })));
+            wrap = wrap.child(
+                deferred(div().absolute().top(px(TALL + 8.)).left_0()
+                    .child(menu.max_h(px(380.)).overflow_y_scroll())).with_priority(1),
             );
         }
         wrap
