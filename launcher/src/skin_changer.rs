@@ -345,7 +345,7 @@ impl Launcher {
         }).detach();
     }
 
-    fn skin_card(&self, id: String, name: String, image: Option<Arc<RenderImage>>, cx: &mut Context<Self>) -> Div {
+    fn skin_card(&self, id: String, name: String, image: Option<Arc<RenderImage>>, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         let hovered = self.skin_hovered.as_deref() == Some(id.as_str());
         let editing = self.skin_editing.as_deref() == Some(id.as_str());
