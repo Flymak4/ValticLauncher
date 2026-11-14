@@ -417,7 +417,7 @@ impl Launcher {
         for cape in self.skin_capes.clone() {
             let id = cape.id.clone();
             let label = if cape.active { format!("✓ {}", cape.name) } else { cape.name };
-            let capebtn = button(SharedString::from(format!("cape-{}", cape.id)), &label,
+            let capebtn = button(SharedString::from(format!("cape-{}", cape.id)), label,
                 if cape.active { Kind::Primary } else { Kind::Secondary }, &t);
             capes = capes.child(if self.skin_cape_busy { disabled(capebtn) } else {
                 capebtn.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
