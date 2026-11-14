@@ -1909,6 +1909,19 @@ impl Launcher {
             }
             return;
         }
+        // Never silently launch another version when the chosen instance has a pinned
+        // version which has since been removed. Selecting the old launcher version is
+        // especially confusing when that build doesn't have the instance's native mods.
+        if let Some(pinned) = self.selected_instance().and_then(|i| i.version.as_ref()) {
+            if !self.installed.contains(pinned) {
+                self.client_error = Some(trf(
+                    "This instance needs Valtic {version}. Install that version before playing.",
+                    &[("version", &backend::game_version(pinned))],
+                ));
+                self.go(Page::Versions);
+                return;
+            }
+        }
         let Some(tag) = self.selected().cloned() else {
             self.client_error = Some(tr("Install a Valtic game version before playing.").to_string());
             self.go(Page::Versions);
