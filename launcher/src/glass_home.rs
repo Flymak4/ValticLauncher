@@ -250,7 +250,6 @@ impl Launcher {
                 let deletable = !busy;
                 let mut menu = ui::popover(225.)
                     .id(SharedString::from(format!("library-context-{}", instance.id)))
-                    .absolute().top(px(15.)).right(px(9.))
                     .occlude()
                     .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                         this.library_context_menu = None;
@@ -346,7 +345,13 @@ impl Launcher {
                     menu = menu.child(ui::text(12., FontWeight::NORMAL, ink::NOTE)
                         .p(px(10.)).child(reason));
                 }
-                card = card.child(menu);
+                // The news section is rendered after the library. Paint this
+                // floating menu in a deferred overlay so news cards cannot
+                // cover its lower actions (especially Delete instance).
+                card = card.child(
+                    deferred(div().absolute().top(px(15.)).right(px(9.)).child(menu))
+                        .with_priority(2),
+                );
             }
             if let Some(confirmation) = self.delete_confirmation(&instance, cx) {
                 card = card.child(confirmation);
