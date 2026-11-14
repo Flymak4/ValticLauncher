@@ -70,7 +70,37 @@ jobs:
         run: |
           $officialId = $env:VALTIC_MSA_CLIENT_ID
           $temporaryId = $env:VALTIC_TEMP_MSA_CLIENT_ID
-          $approved = $env:VALTIC_MSA_APPROVED -match '^(?i:1|true)
+          $approved = $env:VALTIC_MSA_APPROVED -match '^(?i:1|true)$'
+          function Is-ValidId([string]$id) {
+            $parsed = [guid]::Empty
+            return (-not [string]::IsNullOrWhiteSpace($id)) -and [guid]::TryParse($id, [ref]$parsed) -and $parsed -ne [guid]::Empty
+          }
+          $hasOfficial = Is-ValidId $officialId
+          $hasTemporary = Is-ValidId $temporaryId
+          if (-not [string]::IsNullOrWhiteSpace($officialId) -and -not $hasOfficial) {
+            throw 'VALTIC_MSA_CLIENT_ID is not a valid public-client GUID.'
+          }
+          if (-not [string]::IsNullOrWhiteSpace($temporaryId) -and -not $hasTemporary) {
+            throw 'VALTIC_TEMP_MSA_CLIENT_ID is not a valid public-client GUID.'
+          }
+          if ($approved -and -not $hasOfficial) {
+            throw 'VALTIC_MSA_APPROVED is true but VALTIC_MSA_CLIENT_ID is not configured.'
+          }
+          if ($approved) {
+            Write-Host 'Microsoft sign-in: Valtic approved application.'
+            "### Microsoft sign-in: Valtic application selected" >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($hasTemporary) {
+            Write-Host 'Microsoft sign-in: explicitly authorized temporary application.'
+            "### Microsoft sign-in: temporary authorized application selected" >> $env:GITHUB_STEP_SUMMARY
+            "After Valtic is approved, set VALTIC_MSA_APPROVED=true and rebuild to migrate. Users will sign in again." >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($hasOfficial) {
+            Write-Host 'Microsoft sign-in: Valtic application pending approval (Minecraft Services may refuse).'
+            "### Microsoft sign-in: Valtic application awaiting approval" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Host '::warning::Microsoft sign-in has no authorized client ID. Use Valtic or an explicitly authorized temporary public-client ID.'
+            "### Microsoft sign-in unavailable" >> $env:GITHUB_STEP_SUMMARY
+            "Set VALTIC_MSA_CLIENT_ID or VALTIC_TEMP_MSA_CLIENT_ID as an Actions variable. See MICROSOFT_SIGN_IN.md." >> $env:GITHUB_STEP_SUMMARY
+          }
 
       # Embed the new Valtic V / blossom logo into the Windows app and taskbar.
       # Generate it before build.rs compiles resources.
