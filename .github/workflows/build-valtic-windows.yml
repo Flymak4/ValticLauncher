@@ -37,11 +37,13 @@ jobs:
     env:
       # Keep the CRT with the executable, like Horizon's upstream Windows release.
       RUSTFLAGS: -C target-feature=+crt-static
-      # Register your OWN Microsoft public client app ID to enable sign-in.
-      # Microsoft Entra public client ID (not a secret).
-      # Valtic's public Microsoft application ID (no client secret). Allow overriding via Actions.
-      VALTIC_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID || '5cc9c47c-7e6e-4012-9ef3-b73b06d73e7a' }}
-      HORIZON_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID || '5cc9c47c-7e6e-4012-9ef3-b73b06d73e7a' }}
+      # The primary ID must belong to Valtic; only use a temporary ID with its owner's
+      # explicit permission. Never bake another launcher's app identity into releases.
+      VALTIC_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID || '' }}
+      VALTIC_TEMP_MSA_CLIENT_ID: ${{ vars.VALTIC_TEMP_MSA_CLIENT_ID || '' }}
+      # Publisher sets this to true after Valtic's Minecraft Services approval.
+      # The next Valtic launcher update then prioritizes Valtic's own application ID.
+      VALTIC_MSA_APPROVED: ${{ vars.VALTIC_MSA_APPROVED || 'false' }}
       HORIZON_TELEMETRY_URL: "off"
       # Each successful build receives a monotonically increasing launcher version.
       HORIZON_LAUNCHER_VERSION: 0.2.${{ github.run_number }}
@@ -66,14 +68,257 @@ jobs:
       - name: Check Microsoft sign-in configuration
         shell: pwsh
         run: |
-          $clientId = $env:VALTIC_MSA_CLIENT_ID
-          $parsed = [guid]::Empty
-          if ([string]::IsNullOrWhiteSpace($clientId) -or -not [guid]::TryParse($clientId, [ref]$parsed) -or $parsed -eq [guid]::Empty) {
-            Write-Host "::warning::VALTIC_MSA_CLIENT_ID is missing or invalid. The Windows app will compile, but Microsoft sign-in will be unavailable until a registered public client ID is configured and the launcher is rebuilt."
-            "### Microsoft sign-in is not configured" >> $env:GITHUB_STEP_SUMMARY
-            "This build can open but cannot sign in or launch Minecraft. Set the Actions variable `VALTIC_MSA_CLIENT_ID` to your registered Microsoft public client app ID and build again. See MICROSOFT_SIGN_IN.md." >> $env:GITHUB_STEP_SUMMARY
+          $officialId = $env:VALTIC_MSA_CLIENT_ID
+          $temporaryId = $env:VALTIC_TEMP_MSA_CLIENT_ID
+          $approved = $env:VALTIC_MSA_APPROVED -match '^(?i:1|true)
+
+      # Embed the new Valtic V / blossom logo into the Windows app and taskbar.
+      # Generate it before build.rs compiles resources.
+      - name: Generate Valtic Windows app icon
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --quiet Pillow
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install Pillow for icon generation' }
+          @'
+          from pathlib import Path
+          from PIL import Image
+
+          # This is the NEW pink V / cherry-blossom app icon, not the old emblem.
+          source = Path("launcher/assets/valtic/valtic-app-icon.png")
+          if not source.is_file():
+              raise SystemExit(f"Missing Valtic taskbar icon: {source}")
+          emblem = Image.open(source).convert("RGBA")
+          alpha = emblem.getchannel("A")
+          bounds = alpha.point(lambda a: 255 if a >= 12 else 0).getbbox()
+          if bounds is None:
+              raise SystemExit("Valtic app icon is transparent")
+          emblem = emblem.crop(bounds)
+
+          # Resize UP as well as down. The source is 128px, so thumbnail()
+          # would leave it half-sized on a 256px ICO canvas.
+          scale = min(240.0 / emblem.width, 240.0 / emblem.height)
+          icon_size = (
+              max(1, round(emblem.width * scale)),
+              max(1, round(emblem.height * scale)),
+          )
+          emblem = emblem.resize(icon_size, Image.Resampling.LANCZOS)
+          square = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+          square.alpha_composite(emblem, ((256 - emblem.width) // 2, (256 - emblem.height) // 2))
+          dest = Path("packaging/icons/valtic.ico")
+          sizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256]
+          square.save(dest, format="ICO", sizes=[(n, n) for n in sizes])
+          print(f"New Valtic app icon from {source}: {dest} ({dest.stat().st_size} bytes)")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Could not generate the Valtic app icon' }
+
+      # Build the native game with the dedicated in-game guest restrictions.
+      # The player's download remains a single setup EXE; this secondary binary
+      # is fetched automatically by the launcher only for Guest Play.
+      - name: Compile restricted Valtic guest game
+        run: cargo build --release --locked --package horizon-client --bin horizon-client
+
+      - name: Compile Valtic Launcher
+        working-directory: launcher
+        run: cargo build --release --locked --bin valtic-launcher
+
+      - name: Verify Windows executable and prepare one-click installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = 'launcher/target/release/valtic-launcher.exe'
+          if (!(Test-Path $exe)) { throw 'Valtic executable was not produced.' }
+
+          # This binary uses the Windows GUI subsystem, which does not reliably
+          # return console output for --version in PowerShell. Cargo already
+          # verified the requested --bin valtic-launcher target during build.
+          # Validate the generated Windows executable directly instead.
+          $binary = Get-Item $exe
+          if ($binary.Length -lt 1MB) { throw 'Valtic executable looks incomplete.' }
+          $stream = [System.IO.File]::OpenRead($binary.FullName)
+          try {
+            $signature = [byte[]]::new(2)
+            if ($stream.Read($signature, 0, 2) -ne 2 -or $signature[0] -ne 0x4D -or $signature[1] -ne 0x5A) {
+              throw 'Valtic build is not a valid Windows executable.'
+            }
+          } finally {
+            $stream.Dispose()
+          }
+          Write-Host "Verified $($binary.Name) ($([math]::Round($binary.Length / 1MB, 2)) MiB)"
+
+          # Restricted native game executable, published for the launcher's
+          # guest-only automatic download (not a second player download).
+          $guestExe = 'target/release/horizon-client.exe'
+          if (!(Test-Path $guestExe) -or (Get-Item $guestExe).Length -lt 1MB) {
+            throw 'Restricted Valtic guest game executable was not produced.'
+          }
+          New-Item -ItemType Directory -Path publish -Force | Out-Null
+          Copy-Item $guestExe 'publish/valtic-guest-client.exe'
+
+          # The actual signed-in game uses the SAME Valtic-branded Rust source,
+          # rather than installing Horizon's published game binary.
+          $gameFolder = 'publish-game/valtic-windows-x64'
+          New-Item -ItemType Directory -Path $gameFolder -Force | Out-Null
+          Copy-Item $guestExe "$gameFolder/valtic-client.exe"
+          Copy-Item 'research-lock.json' "$gameFolder/research-lock.json"
+
+          # Use the Cherry Grove artwork already bundled in Valtic Launcher.
+          # Keep the six cubemap faces in a separate versioned override folder:
+          # Mojang's prepared assets and player resource packs remain untouched.
+          @'
+          from pathlib import Path
+          from PIL import Image, ImageEnhance
+          source = Path('launcher/assets/valtic/cherry_grove.jpg')
+          if not source.is_file():
+              raise SystemExit('Missing bundled Cherry Grove scene')
+          image = Image.open(source).convert('RGB')
+          side = min(image.size)
+          out = Path('publish-game/valtic-windows-x64/valtic-panorama/assets/minecraft/textures/gui/title/background')
+          out.mkdir(parents=True, exist_ok=True)
+          for face in range(6):
+              # Different, overlapping square views from our existing Minecraft
+              # cherry-grove artwork. Six equal-sized textures for the cube.
+              left = round((image.width - side) * face / 5)
+              top = round((image.height - side) * (5 - face) / 10)
+              view = image.crop((left, top, left + side, top + side))
+              view = ImageEnhance.Color(view).enhance(0.93)
+              view.resize((512, 512), Image.Resampling.LANCZOS).save(out / f'panorama_{face}.png')
+          print('Bundled six 512x512 Valtic Cherry Grove panorama faces')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the Valtic panorama' }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path $gameFolder -DestinationPath 'dist/valtic-windows-x64.zip' -CompressionLevel Optimal -Force
+          if ((Get-Item 'dist/valtic-windows-x64.zip').Length -lt 1MB) {
+            throw 'Valtic game archive looks incomplete.'
+          }
+
+          # A single directly downloadable EXE: its filename activates the built-in
+          # setup wizard, which installs the launcher and supports future updates.
+          # Do not package a player download ZIP or an outer folder.
+          New-Item -ItemType Directory -Path publish -Force | Out-Null
+          Copy-Item $exe 'publish/valtic-launcher-setup.exe'
+          if ((Get-Item 'publish/valtic-launcher-setup.exe').Length -lt 1MB) {
+            throw 'Standalone Valtic Launcher setup EXE looks incomplete.'
+          }
+
+          # Internal-only archive for the in-app updater, NOT the player download.
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          # The in-app updater requires the executable to have this exact name.
+          New-Item -ItemType Directory -Path 'publish-update' -Force | Out-Null
+          Copy-Item $exe 'publish-update/valtic-launcher.exe'
+          Compress-Archive -Path 'publish-update/*' -DestinationPath 'dist/valtic-launcher-windows-x64.zip' -CompressionLevel Optimal -Force
+          if ((Get-Item 'dist/valtic-launcher-windows-x64.zip').Length -lt 1MB) {
+            throw 'In-app update archive looks incomplete.'
+          }
+
+      # Keep the standalone EXE available even when this repository's GitHub
+      # Actions policy denies release creation (HTTP 403). GitHub archives
+      # Actions artifacts for transport; the public release remains a direct EXE.
+      - name: Save standalone Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Valtic-Launcher-Setup-${{ github.run_number }}
+          path: publish/valtic-launcher-setup.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Save matching Valtic game and updater assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: Valtic-Game-and-Updater-${{ github.run_number }}
+          path: |
+            publish/valtic-guest-client.exe
+            dist/valtic-launcher-windows-x64.zip
+            dist/valtic-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish Valtic launcher update
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+        # Create the release ONLY after successfully building and verifying the Windows binary.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.VALTIC_RELEASE_TOKEN || github.token }}
+          HAS_PUBLIC_RELEASE_TOKEN: ${{ secrets.VALTIC_RELEASE_TOKEN != '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $destination = $env:VALTIC_UPDATE_REPO
+          $tag = $env:HORIZON_LAUNCHER_TAG
+          if ($destination -ne $env:GITHUB_REPOSITORY -and $env:HAS_PUBLIC_RELEASE_TOKEN -ne 'true') {
+            Write-Host "::warning::Public updater publishing requires VALTIC_RELEASE_TOKEN."
+            "### Valtic update feed is not published" >> $env:GITHUB_STEP_SUMMARY
+            "Set repository variable VALTIC_UPDATE_REPO to your public distribution repository, and secret VALTIC_RELEASE_TOKEN to a fine-grained token with contents write access to it." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          # A public distribution repository must already have a default branch.
+          # Target this build's SHA only when publishing into the source repo.
+          if ($destination -eq $env:GITHUB_REPOSITORY) {
+            $target = $env:GITHUB_SHA
           } else {
-            Write-Host 'Microsoft public client ID is configured.'
+            $target = 'main'
+          }
+          # Publish the game's first-party release separately from the launcher.
+          # Game updates follow the verified Horizon source merged into this fork,
+          # while clients download ONLY the Valtic-built game archive.
+          $gameTag = "v1.0.$env:GITHUB_RUN_NUMBER"
+          $gameRelease = gh release view $gameTag --repo $destination --json tagName --jq .tagName 2>$null
+          if ($LASTEXITCODE -eq 0 -and $gameRelease -eq $gameTag) {
+            gh release upload $gameTag 'dist/valtic-windows-x64.zip' --clobber --repo $destination
+          } else {
+            gh release create $gameTag 'dist/valtic-windows-x64.zip' --repo $destination --target $target --title "Valtic Client 26.3 ($gameTag)" --notes "Official Valtic Rust game build, based on the continuously synced Horizon engine. Valtic Cherry Grove panorama and startup included. Installed automatically by Valtic Launcher." --latest=false
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish Valtic game $gameTag" }
+
+          # Exactly one player-facing launcher download: the setup EXE.
+          # The ZIP files are used internally by launcher / game auto-updates.
+          gh release create $tag 'publish/valtic-launcher-setup.exe' 'dist/valtic-launcher-windows-x64.zip' 'publish/valtic-guest-client.exe' --repo $destination --target $target --title "Valtic Launcher $env:HORIZON_LAUNCHER_VERSION" --notes "Download valtic-launcher-setup.exe and double-click to install Valtic Launcher. This is a direct Windows EXE download, with no ZIP or folder extraction. Existing settings, worlds and instances are preserved. The separate ZIP asset is used only by the automatic in-app updater." --latest
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::Release upload blocked. Enable Settings > Actions > General > Workflow permissions > Read and write permissions, or configure VALTIC_RELEASE_TOKEN with Contents: Read and write access."
+            "### Build compiled, but the release was blocked by GitHub permissions" >> $env:GITHUB_STEP_SUMMARY
+            "Change GitHub Actions workflow permissions to **Read and write** or configure secret **VALTIC_RELEASE_TOKEN** (Contents write), then rerun. The compiled EXE is also saved under the run's **Artifacts**." >> $env:GITHUB_STEP_SUMMARY
+            throw "Could not publish launcher release $tag to $destination."
+          }
+          "### Download Valtic Launcher (single EXE)" >> $env:GITHUB_STEP_SUMMARY
+          $exeUrl = "https://github.com/$destination/releases/download/$([uri]::EscapeDataString($tag))/valtic-launcher-setup.exe"
+          "[**Download Valtic Launcher for Windows (.exe)**]($exeUrl) — just open the EXE; no folders or ZIPs to extract." >> $env:GITHUB_STEP_SUMMARY
+          "Published $tag and game $gameTag to [$destination](https://github.com/$destination/releases)." >> $env:GITHUB_STEP_SUMMARY
+          $visibility = gh repo view $destination --json visibility --jq '.visibility'
+          if ($visibility -ne 'PUBLIC') {
+            Write-Host "::warning::The updater's release repository is PRIVATE. Players cannot check for updates until a PUBLIC distribution repository is configured."
+            "**Important:** This release repository is private. Players cannot auto-update until a public distribution repository is configured." >> $env:GITHUB_STEP_SUMMARY
+          }
+
+
+          function Is-ValidId([string]$id) {
+            $parsed = [guid]::Empty
+            return (-not [string]::IsNullOrWhiteSpace($id)) -and [guid]::TryParse($id, [ref]$parsed) -and $parsed -ne [guid]::Empty
+          }
+          $hasOfficial = Is-ValidId $officialId
+          $hasTemporary = Is-ValidId $temporaryId
+          if (-not [string]::IsNullOrWhiteSpace($officialId) -and -not $hasOfficial) {
+            throw 'VALTIC_MSA_CLIENT_ID is not a valid public-client GUID.'
+          }
+          if (-not [string]::IsNullOrWhiteSpace($temporaryId) -and -not $hasTemporary) {
+            throw 'VALTIC_TEMP_MSA_CLIENT_ID is not a valid public-client GUID.'
+          }
+          if ($approved -and -not $hasOfficial) {
+            throw 'VALTIC_MSA_APPROVED is true but VALTIC_MSA_CLIENT_ID is not configured.'
+          }
+          if ($approved) {
+            Write-Host 'Microsoft sign-in: Valtic approved application.'
+            "### Microsoft sign-in: Valtic application selected" >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($hasTemporary) {
+            Write-Host 'Microsoft sign-in: explicitly authorized temporary application.'
+            "### Microsoft sign-in: temporary authorized application selected" >> $env:GITHUB_STEP_SUMMARY
+            "After Valtic is approved, set `VALTIC_MSA_APPROVED=true` and rebuild to migrate. Users will sign in again." >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($hasOfficial) {
+            Write-Host 'Microsoft sign-in: Valtic application pending approval (Minecraft Services may refuse).'
+            "### Microsoft sign-in: Valtic application awaiting approval" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Host '::warning::Microsoft sign-in has no authorized client ID. Use Valtic or an explicitly authorized temporary public-client ID.'
+            "### Microsoft sign-in unavailable" >> $env:GITHUB_STEP_SUMMARY
+            "Set `VALTIC_MSA_CLIENT_ID` or `VALTIC_TEMP_MSA_CLIENT_ID` as an Actions variable. See MICROSOFT_SIGN_IN.md." >> $env:GITHUB_STEP_SUMMARY
           }
 
       # Embed the new Valtic V / blossom logo into the Windows app and taskbar.
