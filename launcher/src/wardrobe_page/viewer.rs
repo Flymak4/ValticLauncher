@@ -29,7 +29,7 @@ const SCROLL_STEP: f32 = 40.;
 
 /// What the player wears in the view.
 #[derive(Clone)]
-pub(super) struct Outfit {
+pub(crate) struct Outfit {
     pub skin: Arc<Texture>,
     pub slim: bool,
     pub items: Vec<Arc<Item>>,
@@ -51,7 +51,7 @@ impl Outfit {
     }
 }
 
-pub(super) struct Viewer {
+pub(crate) struct Viewer {
     /// Its size in points.
     size: (f32, f32),
     outfit: Option<(Outfit, Part)>,
@@ -74,7 +74,7 @@ impl Viewer {
     }
 
     /// A view `w`×`h` points.
-    pub(super) fn sized(w: f32, h: f32) -> Self {
+    pub(crate) fn sized(w: f32, h: f32) -> Self {
         Self {
             size: (w, h),
             outfit: None,
@@ -89,7 +89,7 @@ impl Viewer {
     }
 
     /// Shows `outfit`, if it is a new one; `motion` is whether animations may play.
-    pub(super) fn dress(&mut self, outfit: Outfit, motion: bool, cx: &mut Context<Self>) {
+    pub(crate) fn dress(&mut self, outfit: Outfit, motion: bool, cx: &mut Context<Self>) {
         if self.outfit.as_ref().is_some_and(|(o, _)| *o == outfit) {
             return;
         }
@@ -221,7 +221,7 @@ impl Render for Viewer {
 /// The view in the page, with the pointer: press and drag to turn (followed past the view's
 /// edges while held, as a scrollbar's), the wheel to zoom. `dragging` is the page's
 /// (`set_dragging` changes it), so that the page draws the grabbing hand.
-pub(super) fn frame(
+pub(crate) fn frame(
     viewer: Entity<Viewer>,
     (w, h): (f32, f32),
     dragging: bool,

@@ -325,6 +325,18 @@ struct Launcher {
     skin_slim: bool,
     skin_uploading: bool,
     skin_status: Option<String>,
+    /// The skin currently hovered or opened in the inline editor.
+    skin_hovered: Option<String>,
+    skin_editing: Option<String>,
+    /// Official Minecraft capes for the selected signed-in account.
+    skin_capes: Vec<skin_changer::Cape>,
+    skin_capes_owner: Option<String>,
+    skin_capes_loaded: bool,
+    skin_cape_busy: bool,
+    /// The shared, draggable full-body Minecraft preview.
+    skin_preview: Option<gpui::Entity<wardrobe_page::viewer::Viewer>>,
+    skin_preview_for: Option<(String, bool)>,
+    skin_preview_dragging: bool,
     /// Name tag styles' marks; they outlive the account's `wardrobe`.
     wardrobe_marks: wardrobe_page::Marks,
     /// Ask the service again on the next draw of the Wardrobe (set by each visit).
@@ -668,6 +680,15 @@ impl Launcher {
             skin_slim: false,
             skin_uploading: false,
             skin_status: None,
+            skin_hovered: None,
+            skin_editing: None,
+            skin_capes: Vec::new(),
+            skin_capes_owner: None,
+            skin_capes_loaded: false,
+            skin_cape_busy: false,
+            skin_preview: None,
+            skin_preview_for: None,
+            skin_preview_dragging: false,
             wardrobe_marks: Default::default(),
             wardrobe_reload: false,
             shop: Default::default(),

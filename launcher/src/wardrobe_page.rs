@@ -26,7 +26,7 @@ use std::sync::Arc;
 mod marks;
 mod purchases;
 mod shop;
-mod viewer;
+pub(super) mod viewer;
 pub(super) use marks::Marks;
 pub(super) use shop::Shop;
 use viewer::{Outfit, Viewer};
@@ -106,7 +106,7 @@ fn game_language() -> &'static str {
 /// The account's skin as the preview takes it, 64×64 only: its own from the profile heads'
 /// cache, else the default skin (Steve, Alex…) its UUID wears in the game, from the player's
 /// prepared game files in `resources`. None (a stand-in figure) when neither reads.
-fn skin(account: &account::Account, resources: &std::path::Path) -> Option<(Arc<Texture>, bool)> {
+pub(super) fn skin(account: &account::Account, resources: &std::path::Path) -> Option<(Arc<Texture>, bool)> {
     let own = account.skin.as_ref().and_then(|(url, model)| {
         let cache = backend::data_dir().join("profile-heads");
         let png = horizon_launcher::heads::cached_skin(url, &cache)?;
@@ -277,14 +277,14 @@ fn stand_in_skin() -> Arc<Texture> {
 }
 
 /// `plain()`, made once: the views compare skins by their file.
-fn plain_skin() -> Arc<Texture> {
+pub(super) fn plain_skin() -> Arc<Texture> {
     static PLAIN: std::sync::LazyLock<Arc<Texture>> =
         std::sync::LazyLock::new(|| Arc::new(plain()));
     PLAIN.clone()
 }
 
 /// A 64×64 skin's PNG as the preview takes it.
-fn skin_texture(png: &[u8]) -> Option<Arc<Texture>> {
+pub(super) fn skin_texture(png: &[u8]) -> Option<Arc<Texture>> {
     let image = image::load_from_memory(png).ok()?.to_rgba8();
     (image.dimensions() == (64, 64)).then(|| {
         Arc::new(Texture {
