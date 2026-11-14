@@ -83,6 +83,7 @@ impl Status {
         let state = match secrets {
             None => State::SignInRequired,
             Some(s) if s.sign_in_required => State::SignInRequired,
+            Some(s) if s.msa_client_id.as_deref().is_some_and(|saved| client_id().as_deref() != Some(saved)) => State::SignInRequired,
             Some(s) if !s.owns => State::OwnershipRequired,
             Some(s) if s.minecraft_expires_at <= now() + RENEW_BEFORE => State::NeedsRefresh,
             Some(_) => State::Ready,

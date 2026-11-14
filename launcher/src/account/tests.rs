@@ -324,6 +324,7 @@ fn secrets(token: &str, owns: bool) -> Secrets {
     Secrets {
         refresh_token: "ms-refresh-1".into(),
         sign_in_required: false,
+        msa_client_id: None,
         minecraft_token: token.into(),
         minecraft_expires_at: now() + 7200,
         xuid: None,
@@ -816,6 +817,7 @@ fn accounts_keep_secrets_in_the_store_only() {
     let secrets = Secrets {
         refresh_token: "r".into(),
         sign_in_required: false,
+        msa_client_id: None,
         minecraft_token: "mc-secret".into(),
         minecraft_expires_at: 1,
         xuid: None,
@@ -1118,6 +1120,7 @@ fn session_files_are_private_and_complete() {
     let secrets = Secrets {
         refresh_token: "r".into(),
         sign_in_required: false,
+        msa_client_id: None,
         minecraft_token: "mc-token".into(),
         minecraft_expires_at: 1,
         xuid: Some("25".into()),
@@ -1145,19 +1148,57 @@ fn session_files_are_private_and_complete() {
 }
 
 #[test]
-fn client_id_is_configuration() {
-    // The run-time variable overrides; empty means not configured.
-    std::env::set_var("HORIZON_MSA_CLIENT_ID", " ");
-    assert_eq!(client_id(), None);
-    std::env::set_var(
-        "HORIZON_MSA_CLIENT_ID",
-        "00000000-1111-2222-3333-444444444444",
+fn authorized_temporary_app_precedes_valtic_until_approved() {
+    let valtic = Some("valtic-app");
+    let temporary = Some("temporary-authorized-app");
+    assert_eq!(
+        choose_client_id(valtic, temporary, None, false).as_deref(),
+        temporary
     );
     assert_eq!(
-        client_id().as_deref(),
-        Some("00000000-1111-2222-3333-444444444444")
+        choose_client_id(valtic, temporary, None, true).as_deref(),
+        valtic
     );
-    std::env::remove_var("HORIZON_MSA_CLIENT_ID");
+    assert_eq!(
+        choose_client_id(Some("  valtic-app  "), Some("  "), None, false).as_deref(),
+        valtic
+    );
+    assert_eq!(
+        choose_client_id(None, None, Some("legacy-authorized-app"), false).as_deref(),
+        Some("legacy-authorized-app")
+    );
+    assert_eq!(choose_client_id(None, Some("  "), None, false), None);
+}
+
+#[test]
+fn switching_microsoft_app_requires_new_sign_in_without_touching_instances() {
+    let (mock, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let mut from_temporary = secrets("mc-token", true);
+    from_temporary.msa_client_id = Some("temporary-app".into());
+    let mut accounts = signed_in(&store, &from_temporary);
+    let original = accounts.accounts.clone();
+
+    // A cached Minecraft token is not a reason to keep playing under a different
+    // OAuth application's ID, even while it has hours remaining.
+    assert!(launch(&ep, Some("valtic-app"), &store, &mut accounts).is_err());
+    assert_eq!(accounts.accounts, original);
+    let stored = kept(&store);
+    assert!(stored.sign_in_required);
+    assert_eq!(stored.msa_client_id.as_deref(), Some("temporary-app"));
+    assert!(mock.lock().unwrap().log.is_empty());
+}
+
+#[test]
+fn microsoft_app_stays_attached_to_refreshes() {
+    let (_, ep) = mock(|_| {});
+    let mut temporary = secrets("old-token", true);
+    temporary.msa_client_id = Some("test-client".into());
+    temporary.minecraft_expires_at = now() + 10;
+    let Check::Owns(_, renewed) = check(&ep, Some("test-client"), &notch(), temporary) else {
+        panic!("expected account refresh");
+    };
+    assert_eq!(renewed.msa_client_id.as_deref(), Some("test-client"));
 }
 
 #[test]

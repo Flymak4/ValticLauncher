@@ -10,8 +10,9 @@
 //! Minecraft: Java Edition, as other launchers do, and the game plays as the selected account.
 //! The game binary itself, its harnesses and the servers don't go through the launcher's gate.
 //!
-//! The Azure app (client ID) is Horizon's own and is configuration: `HORIZON_MSA_CLIENT_ID` at
-//! build time, or at run time to override it. Without one, sign-in says it is not configured.
+//! Valtic owns the sign-in UI and device-code implementation. A temporary application ID is
+//! supported only when its owner authorizes use; after Valtic is approved, a launcher update
+//! selects its own application ID and asks affected accounts to sign in again.
 pub mod session;
 
 use serde_json::{json, Value};
@@ -33,19 +34,42 @@ const NO_PROFILE: &str =
 const OTHER_PROFILE: &str =
     "The Microsoft account now has another Minecraft profile. Sign in again.";
 const SIGN_IN_AGAIN: &str = "Your Microsoft sign-in expired. Sign in again.";
+const SIGN_IN_APP_CHANGED: &str = "Valtic Microsoft sign-in was updated. Sign in again to continue.";
 /// The Minecraft token is renewed when it has less than this left.
 const RENEW_BEFORE: u64 = 3600;
 
-/// The configured Azure app, if any: the run-time variable wins over the build-time one, and an
-/// empty value means none.
+/// Pick one authorized public-client registration. Before approval, prefer the temporary
+/// registration; after approval, prefer Valtic's own. This cannot detect approval itself:
+/// VALTIC_MSA_APPROVED is set by the publisher and embedded by the next launcher build.
+fn choose_client_id(
+    valtic: Option<&str>,
+    temporary: Option<&str>,
+    legacy: Option<&str>,
+    approved: bool,
+) -> Option<String> {
+    let cleaned = |id: Option<&str>| id.map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
+    let valtic = cleaned(valtic);
+    let temporary = cleaned(temporary).or_else(|| cleaned(legacy));
+    if approved {
+        valtic.or(temporary)
+    } else {
+        temporary.or(valtic)
+    }
+}
+
+/// The client ID is public (not a client secret). A runtime setting can override the build
+/// setting; an explicitly empty value disables that registration. Legacy Horizon variable
+/// support is only for an ID the developer is explicitly authorized to use.
 pub fn client_id() -> Option<String> {
-    std::env::var("VALTIC_MSA_CLIENT_ID")
-        .ok()
-        .or_else(|| std::env::var("HORIZON_MSA_CLIENT_ID").ok())
-        .or_else(|| option_env!("VALTIC_MSA_CLIENT_ID").map(str::to_owned))
-        .or_else(|| option_env!("HORIZON_MSA_CLIENT_ID").map(str::to_owned))
-        .map(|id| id.trim().to_owned())
-        .filter(|id| !id.is_empty())
+    let setting = |name: &str, built: Option<&str>| {
+        std::env::var(name).ok().or_else(|| built.map(str::to_owned))
+    };
+    let valtic = setting("VALTIC_MSA_CLIENT_ID", option_env!("VALTIC_MSA_CLIENT_ID"));
+    let temporary = setting("VALTIC_TEMP_MSA_CLIENT_ID", option_env!("VALTIC_TEMP_MSA_CLIENT_ID"));
+    let legacy = setting("HORIZON_MSA_CLIENT_ID", option_env!("HORIZON_MSA_CLIENT_ID"));
+    let approved = setting("VALTIC_MSA_APPROVED", option_env!("VALTIC_MSA_APPROVED"))
+        .is_some_and(|v| v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"));
+    choose_client_id(valtic.as_deref(), temporary.as_deref(), legacy.as_deref(), approved)
 }
 
 /// Where the requests go: the real services, or a mock in tests.
@@ -479,6 +503,10 @@ pub struct Secrets {
     refresh_token: String,
     #[serde(default)]
     sign_in_required: bool,
+    /// The Microsoft application that issued this refresh token. Legacy sign-ins have no
+    /// provenance and may require a fresh sign-in after an app switch.
+    #[serde(default)]
+    msa_client_id: Option<String>,
     minecraft_token: String,
     minecraft_expires_at: u64,
     #[serde(default)]
@@ -523,6 +551,7 @@ impl Secrets {
         Self {
             refresh_token,
             sign_in_required: false,
+            msa_client_id: None,
             minecraft_token: mc.token,
             minecraft_expires_at: mc.expires_at,
             xuid: mc.xuid,
@@ -555,6 +584,12 @@ fn check_with(
     force: bool,
     progress: &dyn Fn(session::Phase),
 ) -> Check {
+    // Microsoft refresh tokens are application-specific. Never try to refresh a temporary
+    // registration's token using Valtic's new ID, or hand its cached session to the game.
+    if secrets.msa_client_id.as_deref().is_some_and(|saved| Some(saved) != client_id) {
+        secrets.sign_in_required = true;
+        return Check::NoAnswer(SIGN_IN_APP_CHANGED.into(), secrets);
+    }
     if secrets.sign_in_required {
         return Check::NoAnswer(SIGN_IN_AGAIN.into(), secrets);
     }
@@ -576,6 +611,7 @@ fn check_with(
             Ok(mc) => {
                 secrets = Secrets {
                     owns: secrets.owns,
+                    msa_client_id: secrets.msa_client_id.clone(),
                     ..Secrets::new(secrets.refresh_token, mc)
                 }
             }
@@ -1791,10 +1827,15 @@ impl Accounts {
     pub fn has_owner(&self, store: &dyn SecretStore) -> bool {
         // The selected account first: it owning the game ends the search after one account's
         // item — every account's item read can ask for the keychain (macOS, #4912).
+        let current = client_id();
         self.selected()
             .into_iter()
             .chain(self.accounts.iter().filter(|a| Some(*a) != self.selected()))
-            .any(|a| secrets_in(store, &a.uuid).is_some_and(|s| s.owns))
+            .any(|a| {
+                secrets_in(store, &a.uuid).is_some_and(|s| {
+                    s.owns && s.msa_client_id.as_deref().is_none_or(|saved| Some(saved) == current.as_deref())
+                })
+            })
     }
 
     /// Plays as the signed-in account `uuid`.
@@ -1947,7 +1988,8 @@ pub fn launch(
             Check::DoesNot(secrets) => (Some(DOES_NOT_OWN.to_string()), secrets),
             Check::NoAnswer(e, secrets) => (Some(e), secrets),
         };
-        owned = secrets.owns;
+        owned = secrets.owns
+            && secrets.msa_client_id.as_deref().is_none_or(|saved| Some(saved) == client_id);
         if plays {
             pass.offline = said;
         }
@@ -2195,7 +2237,8 @@ impl SignIn {
                     thread_cancel.load(Ordering::Relaxed)
                 })?;
                 let progress = |phase| set(SignInState::Working(phase));
-                let (account, secrets) = finish_sign_in_with_progress(&ep, ms, &progress)?;
+                let (account, mut secrets) = finish_sign_in_with_progress(&ep, ms, &progress)?;
+                secrets.msa_client_id = Some(client_id);
                 progress(session::Phase::Queued);
                 let store = store();
                 let _operation = session::lock(store)?;
@@ -2409,7 +2452,10 @@ fn account_sessions_until(
         // An account the services sent back to sign-in (a refused refresh, a token now for
         // another profile) is never handed over, whatever its token's time says.
         let holds = |s: &Secrets, margin: u64| {
-            s.owns && !s.sign_in_required && s.minecraft_expires_at > now() + margin
+            s.owns
+                && !s.sign_in_required
+                && s.msa_client_id.as_deref().is_none_or(|saved| Some(saved) == client_id)
+                && s.minecraft_expires_at > now() + margin
         };
         let known = holds(&secrets, RENEW_BEFORE);
         let late = operation.is_err() || Instant::now() >= deadline;
