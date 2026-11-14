@@ -157,7 +157,6 @@ impl Launcher {
         let ready = prepared || java.is_some();
         let compact = self.window_width < 1050.;
 
-        let server_card = self.valtic_server_card();
         // This is Valtic's bundled, real Minecraft cherry-grove artwork. Decode it once
         // through the image cache rather than constructing new GPU textures each frame.
         let cherry_backdrop = self.icon_image(
@@ -360,11 +359,51 @@ impl Launcher {
         } else {
             Some(self.glass_home_tabs(rows, cx))
         };
-        div().flex().flex_col()
-            .gap(px(18.))
-            .child(news)
+        // Keep every quick action connected to the existing native Rust page.
+        let actions = div().flex().flex_col().gap(px(10.))
+            .p(px(20.)).rounded(px(19.))
+            .border_1().border_color(ui::color(0xf7b8d8).opacity(0.24))
+            .bg(ui::color(0x1d1224).opacity(0.92))
+            .child(ui::text(19., FontWeight::BOLD, ink::FULL).child("Quick Actions"))
+            .child(ui::menu_row("valtic-quick-mods", "puzzle", "Mod Browser", false, &self.theme)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.go(Page::Mods); cx.notify();
+                })))
+            .child(ui::menu_row("valtic-quick-settings", "settings-01", "Game Settings", false, &self.theme)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.go(Page::Settings); cx.notify();
+                })))
+            .child(ui::menu_row("valtic-quick-instance", "plus-sign", "Create Instance", false, &self.theme)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.open_instance_dialog(None); cx.notify();
+                })));
+        let snapshot = self.valtic_status.clone();
+        let status = snapshot.as_ref().map(|s| {
+            if s.online {
+                format!("{} / {} players online", s.players, s.capacity)
+            } else {
+                "Server offline".to_string()
+            }
+        }).unwrap_or_else(|| "Checking server status…".to_string());
+        let server = div().flex().flex_col().gap(px(12.))
+            .p(px(20.)).rounded(px(19.))
+            .border_1().border_color(ui::color(0xf7b8d8).opacity(0.24))
+            .bg(ui::color(0x1d1224).opacity(0.92))
+            .child(ui::text(19., FontWeight::BOLD, ink::FULL).child("ValticSMP"))
+            .child(ui::text(13., FontWeight::MEDIUM, ink::SOFT)
+                .child(valtic_status::ADDRESS))
+            .child(ui::text(14., FontWeight::SEMIBOLD, ink::FULL).child(status));
+        let left = div().flex_1().min_w(px(330.))
+            .flex().flex_col().gap(px(18.))
             .child(self.glass_library(cx))
-            .children(advanced)
+            .child(news)
+            .children(advanced);
+        let right = div().w(px(330.)).flex_none()
+            .flex().flex_col().gap(px(18.))
+            .child(actions).child(server);
+        div().flex().flex_col().gap(px(14.))
+            .child(div().w_full().flex().flex_wrap().gap(px(18.))
+                .child(left).child(right))
             .child(ui::text(11., FontWeight::NORMAL, ink::DIM)
                 .child("Valtic is an independent community launcher, not an official Mojang product."))
     }
