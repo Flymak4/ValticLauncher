@@ -240,7 +240,6 @@ impl Launcher {
                 .bg(gpui::linear_gradient(
                     90.,
                     gpui::linear_color_stop(ui::color(0x160b21).opacity(0.72), 0.),
-                    gpui::linear_color_stop(ui::color(0x28162f).opacity(0.62), 0.55),
                     gpui::linear_color_stop(ui::color(0x160b21).opacity(0.82), 1.),
                 )))
             .child(petals)
