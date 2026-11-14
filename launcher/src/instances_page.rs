@@ -85,6 +85,11 @@ impl Launcher {
     pub(super) fn reload_instances(&mut self) {
         self.instances.list = instances::list();
         // An instance deleted outside the launcher must not keep its manager open.
+        if self.library_context_menu.as_ref().is_some_and(|id| {
+            !self.instances.list.iter().any(|instance| &instance.id == id)
+        }) {
+            self.library_context_menu = None;
+        }
         if self.library_managing.as_ref().is_some_and(|id| {
             !self.instances.list.iter().any(|instance| &instance.id == id)
         }) {
@@ -345,6 +350,14 @@ impl Launcher {
     pub(super) fn instance_escape(&mut self) -> bool {
         if self.instances.dialog.as_ref().is_some_and(|d| !d.busy) {
             self.instances.dialog = None;
+            return true;
+        }
+        if self.instances.confirm_delete.take().is_some() {
+            self.instances.delete_error = None;
+            self.library_context_menu = None;
+            return true;
+        }
+        if self.library_context_menu.take().is_some() {
             return true;
         }
         false
@@ -896,8 +909,21 @@ impl Launcher {
         )
     }
 
+    /// Open the existing guarded, recoverable deletion confirmation from Library.
+    pub(super) fn request_library_delete(&mut self, id: &str) {
+        if self.client.is_some() || self.starting_client.is_some() {
+            return;
+        }
+        if !self.instances.list.iter().any(|i| i.id == id && i.kind != InstanceKind::Default) {
+            return;
+        }
+        self.instances.confirm_delete = Some(id.to_string());
+        self.instances.delete_error = None;
+        self.library_context_menu = None;
+    }
+
     /// "Move it to the Trash?" under the actions, once Delete… is pressed.
-    fn delete_confirmation(&self, instance: &Instance, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn delete_confirmation(&self, instance: &Instance, cx: &mut Context<Self>) -> Option<Div> {
         if self.instances.confirm_delete.as_ref() != Some(&instance.id) {
             return None;
         }
@@ -955,6 +981,7 @@ impl Launcher {
                 }
                 self.instances.confirm_delete = None;
                 self.instances.delete_error = None;
+                self.library_context_menu = None;
                 // Play starts Horizon again; the window's copy of the settings says so too.
                 if self.settings.instance.as_deref() == Some(id) {
                     self.settings.instance = None;

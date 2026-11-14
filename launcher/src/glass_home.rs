@@ -153,8 +153,19 @@ impl Launcher {
                 .unwrap_or_else(|| "Valtic Edition".to_string());
             let icon = self.instance_icon(&instance, 44.);
             let selected = instance.clone();
+            let right_clicked = instance.clone();
+            let context_open = self.library_context_menu.as_deref() == Some(instance.id.as_str());
             let mut card = div()
                 .id(SharedString::from(format!("library-{}", instance.id)))
+                .relative()
+                .on_mouse_down(gpui::MouseButton::Right, cx.listener(
+                    move |this, _: &MouseDownEvent, _, cx| {
+                        // Secondary click belongs to this card; never launch a game.
+                        this.library_context_menu = Some(right_clicked.id.clone());
+                        cx.stop_propagation();
+                        cx.notify();
+                    },
+                ))
                 .flex().flex_col()
                 .w(px(264.)).p(px(14.))
                 .rounded(px(radius::LARGE))
@@ -173,7 +184,9 @@ impl Launcher {
                         .child(ui::text(12., FontWeight::NORMAL, ink::NOTE)
                             .truncate().child(version)))
                     .child(ui::icon("arrow-down-01", 17., white(ink::NOTE)))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                        if event.is_right_click() { return; }
+                        this.library_context_menu = None;
                         this.select_instance(&selected);
                         this.library_managing = if this.library_managing.as_deref() == Some(selected.id.as_str()) {
                             None
@@ -226,6 +239,47 @@ impl Launcher {
                         this.go(Page::Mods);
                         cx.notify();
                     }))));
+            }
+            // The right-click menu opens on any point of the instance card.
+            // Deletion always requires a second, explicit confirmation.
+            if context_open {
+                let busy = self.client.is_some() || self.starting_client.is_some();
+                let deletable = instance.kind != instances::Kind::Default && !busy;
+                let mut menu = ui::popover(225.)
+                    .id(SharedString::from(format!("library-context-{}", instance.id)))
+                    .absolute().top(px(15.)).right(px(9.))
+                    .occlude()
+                    .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.library_context_menu = None;
+                        cx.notify();
+                    }));
+                if deletable {
+                    let id = instance.id.clone();
+                    menu = menu.child(
+                        ui::menu_row(
+                            format!("library-delete-{}", instance.id),
+                            "delete-02",
+                            "Delete instance…",
+                            true,
+                            &self.theme,
+                        ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.request_library_delete(&id);
+                            cx.notify();
+                        })),
+                    );
+                } else {
+                    let reason = if busy {
+                        "Close the game before deleting an instance."
+                    } else {
+                        "The default game folder cannot be deleted."
+                    };
+                    menu = menu.child(ui::text(12., FontWeight::NORMAL, ink::NOTE)
+                        .p(px(10.)).child(reason));
+                }
+                card = card.child(menu);
+            }
+            if let Some(confirmation) = self.delete_confirmation(&instance, cx) {
+                card = card.child(confirmation);
             }
             cards.push(card.into_any_element());
         }
