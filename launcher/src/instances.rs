@@ -215,6 +215,10 @@ fn is_zero(n: &u64) -> bool {
 struct Store {
     #[serde(default)]
     instances: BTreeMap<String, Meta>,
+    /// Removing the inherited game-home profile is a library-only operation.
+    /// The shared game folder must never be sent to Trash.
+    #[serde(default)]
+    default_hidden: bool,
 }
 
 impl Store {
@@ -284,10 +288,15 @@ impl Instance {
     }
 }
 
-/// The instances, by the default game home and the launcher's data folder: Horizon first, then
-/// by group and name.
+/// The instances, by the legacy game home and the launcher's data folder.
 pub fn list() -> Vec<Instance> {
     list_in(&backend::game_home(), &backend::data_dir())
+}
+
+/// Whether the inherited game-home profile was explicitly removed from the
+/// library. Its worlds and shared data remain in place for other components.
+pub fn default_hidden() -> bool {
+    Store::load(&backend::data_dir()).default_hidden
 }
 
 fn list_in(game_home: &Path, data: &Path) -> Vec<Instance> {
@@ -415,10 +424,16 @@ fn delete_in(
 ) -> Result<Instance, String> {
     let instance = find_in(&list_in(game_home, data), query)?;
     if instance.kind == Kind::Default {
-        return Err(format!(
-            "{} is the game's own folder: it can't be deleted.",
-            instance.name
-        ));
+        // The old default points at the SHARED game home, which also stores
+        // user-created instances. Trashing it would delete every instance.
+        // Only remove the old entry from the launcher library instead.
+        let mut store = Store::load(data);
+        if store.default_hidden {
+            return Err("The inherited default instance is already removed.".into());
+        }
+        store.default_hidden = true;
+        store.save(data)?;
+        return Ok(instance);
     }
     trash(&instance.work)
         .map_err(|e| format!("{} could not go to the Trash: {e}", instance.name))?;
@@ -429,17 +444,23 @@ fn delete_in(
     Ok(instance)
 }
 
-/// The instance Play starts: the one picked in the launcher, else Horizon.
+/// The instance Play starts. Prefer a player-created instance instead of
+/// silently falling back to the inherited default game-home profile.
 pub fn selected() -> Instance {
     let all = list();
+    let hidden = Store::load(&backend::data_dir()).default_hidden;
     backend::Settings::load()
         .instance
-        .and_then(|id| all.iter().find(|i| i.id == id).cloned())
+        .and_then(|id| all.iter().find(|i| i.id == id && !(hidden && i.kind == Kind::Default)).cloned())
+        .or_else(|| all.iter().find(|i| i.kind != Kind::Default).cloned())
         .unwrap_or_else(|| all[0].clone())
 }
 
 pub fn select(query: &str) -> Result<Instance, String> {
     let instance = find(query)?;
+    if instance.kind == Kind::Default && default_hidden() {
+        return Err("The inherited default instance was removed from the library.".into());
+    }
     let mut settings = backend::Settings::load();
     settings.instance = (instance.kind != Kind::Default).then(|| instance.id.clone());
     settings.save()?;

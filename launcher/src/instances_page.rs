@@ -95,19 +95,19 @@ impl Launcher {
         }) {
             self.library_managing = None;
         }
-        // Do not offer the implicit Valtic profile on a fresh installation.
-        // A launcher-generated horizon-player.txt is not evidence that anyone
-        // created an instance. Preserve existing legacy players' worlds,
-        // settings, custom names and play history without moving their data.
+        // A fresh install must NEVER show an automatically created Valtic
+        // instance. Downloaded options, empty directories and mod config files
+        // do not count as a user-created profile. Keep legacy defaults with
+        // actual worlds or saved profile history until explicitly removed.
+        let default_removed = instances::default_hidden();
         self.instances.list.retain(|i| {
             i.kind != instances::Kind::Default
-                || i.name != "Valtic"
-                || !i.played.is_zero()
-                || i.last_played.is_some()
-                || ["saves", "options.txt", "servers.dat", "mods",
-                    "resourcepacks", "shaderpacks", "config", "screenshots"]
-                    .iter()
-                    .any(|item| i.home.join(item).exists())
+                || (!default_removed
+                    && (i.name != "Valtic"
+                        || !i.played.is_zero()
+                        || i.last_played.is_some()
+                        || i.home.join("saves").read_dir()
+                            .is_ok_and(|mut worlds| worlds.next().is_some())))
         });
         // A picture may have come or gone with the change.
         self.instances
@@ -904,13 +904,16 @@ impl Launcher {
 }
 
 impl Launcher {
-    /// Delete…, for every instance but Horizon's own (the game's home); not while a game runs.
+    /// Remove a legacy default entry or trash a player-created instance;
+    /// never remove files from the shared game home.
     fn delete_button(&self, instance: &Instance, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
-        if instance.kind == InstanceKind::Default {
-            return None;
-        }
         let t = self.theme;
-        let delete = button("instance-delete", "Delete…", Kind::Ghost, &t);
+        let label = if instance.kind == InstanceKind::Default {
+            "Remove from Library…"
+        } else {
+            "Delete…"
+        };
+        let delete = button("instance-delete", label, Kind::Ghost, &t);
         if self.client.is_some() || self.starting_client.is_some() {
             return Some(disabled(delete));
         }
@@ -929,7 +932,7 @@ impl Launcher {
         if self.client.is_some() || self.starting_client.is_some() {
             return;
         }
-        if !self.instances.list.iter().any(|i| i.id == id && i.kind != InstanceKind::Default) {
+        if !self.instances.list.iter().any(|i| i.id == id) {
             return;
         }
         self.instances.confirm_delete = Some(id.to_string());
@@ -946,10 +949,17 @@ impl Launcher {
         let id = instance.id.clone();
         let line = match &self.instances.delete_error {
             Some(e) => e.clone(),
+            None if instance.kind == InstanceKind::Default =>
+                "Remove the inherited default instance from your library? The shared game folder, worlds and settings will stay on disk.".into(),
             None => trf(
                 "Move {name} to the Trash, with its worlds and settings? You can get it back from there.",
                 &[("name", &instance.name)],
             ),
+        };
+        let confirm_label = if instance.kind == InstanceKind::Default {
+            "Remove from Library"
+        } else {
+            "Move to Trash"
         };
         Some(
             div()
@@ -969,7 +979,7 @@ impl Launcher {
                     )),
                 )
                 .child(
-                    button("instance-trash", "Move to Trash", Kind::Secondary, &t).on_click(
+                    button("instance-trash", confirm_label, Kind::Secondary, &t).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.delete_instance(&id);
                             cx.notify();
@@ -990,14 +1000,18 @@ impl Launcher {
             .find(|i| i.id == id)
             .map(|i| i.name.clone());
         match instances::delete_with_selection(id) {
-            Ok((_, saved)) => {
+            Ok((removed, saved)) => {
                 if let Some(name) = name {
-                    crate::glass_toast::say(trf("Deleted {name}", &[("name", &name)]));
+                    crate::glass_toast::say(if removed.kind == InstanceKind::Default {
+                        tr("Removed default instance from library").to_string()
+                    } else {
+                        trf("Deleted {name}", &[("name", &name)])
+                    });
                 }
                 self.instances.confirm_delete = None;
                 self.instances.delete_error = None;
                 self.library_context_menu = None;
-                // Play starts Horizon again; the window's copy of the settings says so too.
+                // No implicit default is selected after a user removes it.
                 if self.settings.instance.as_deref() == Some(id) {
                     self.settings.instance = None;
                     self.save_settings();
