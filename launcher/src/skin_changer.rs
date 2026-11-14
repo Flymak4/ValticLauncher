@@ -426,7 +426,7 @@ impl Launcher {
                 .bg(t.plate_soft)
                 .child(shell::text(theme::night::TITLE, t.accent).child("+"))
                 .child(shell::text(theme::night::UI, t.ink).child("Add skin"))
-                .child(shell::text(theme::night::MICRO, t.ink_soft).child("Choose a PNG"))
+                .child(shell::text(theme::MICRO, t.ink_soft).child("Choose a PNG"))
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_minecraft_skin(cx)))
         );
