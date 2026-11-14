@@ -674,28 +674,26 @@ impl Launcher {
                     Some(_) => (tr("Update"), "download-04"),
                     None => (tr("Play"), "play"),
                 };
-                let press = play_press(ready, self.owner, false);
                 let main = body(label.into(), icon).id("play").cursor_pointer();
-                let main = match (&update, press) {
-                    (Some(_), _) => main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                let main = if update.is_some() {
+                    main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.install_update();
                         cx.notify();
-                    })),
-                    // Play always asks which instance to launch. Selecting one then
-                    // prepares missing native files (or downloads Java) before starting.
-                    // The picker stays accessible while Valtic's own Microsoft app awaits
-                    // approval, even if that instance cannot be launched yet.
-                    (None, _) => main.on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                        if !this.closed_by_this_press(event) {
-                            this.picker.open = false;
-                            this.home_menu = if this.home_menu == HomeMenu::Instances {
-                                HomeMenu::None
-                            } else {
-                                HomeMenu::Instances
-                            };
+                    }))
+                } else {
+                    // The instance dropdown is now independent of Play. Play
+                    // launches the selected instance, or offers to create one
+                    // when a fresh install has an empty library.
+                    main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.picker.open = false;
+                        this.home_menu = HomeMenu::None;
+                        if this.selected_instance().is_some() {
+                            this.play_selected_or_prepare();
+                        } else {
+                            this.open_instance_dialog(None);
                         }
                         cx.notify();
-                    })),
+                    }))
                 };
                 base.bg(accent)
                     .text_color(on_accent)
