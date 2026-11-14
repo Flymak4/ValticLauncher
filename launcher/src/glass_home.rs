@@ -670,6 +670,27 @@ impl Launcher {
                         cx.notify();
                     })),
             ),
+            // No Play button or guest menu until a Minecraft-owning Microsoft
+            // account has been checked. The sign-in action never starts a game.
+            None if self.owner.is_none() => base
+                .bg(white(0.12))
+                .text_color(white(ink::SOFT))
+                .child(body(tr("Checking account…").into(), "lock-01")),
+            None if self.owner == Some(false) => base
+                .bg(accent)
+                .text_color(on_accent)
+                .hover(|s| s.opacity(0.92))
+                .child(
+                    body(tr("Sign in to play").into(), "lock-01")
+                        .id("play-sign-in")
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.picker.open = false;
+                            this.home_menu = HomeMenu::None;
+                            this.sign_in_to_play();
+                            cx.notify();
+                        })),
+                ),
             None => {
                 let (label, icon) = match &update {
                     Some(_) => (tr("Update"), "download-04"),
@@ -704,7 +725,10 @@ impl Launcher {
         };
         let mut wrap = div()
             .relative()
-            .child(keyboard(group.id("play-group"), &t).child(more));
+            // The more-menu can trigger prepare/update/launch actions, so it is
+            // only shown to verified Minecraft account holders.
+            .child(keyboard(group.id("play-group"), &t)
+                .children((self.owner == Some(true)).then_some(more)));
         if open {
             let locked = running || busy.is_some();
             let mut items: Vec<(&'static str, SharedString, String, bool, PlayItem)> = Vec::new();

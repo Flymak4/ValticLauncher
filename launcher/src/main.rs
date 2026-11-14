@@ -1296,28 +1296,9 @@ impl Launcher {
                         }
                     }
                 }
-                Msg::GuestClient(tag, command) => {
-                    if self.starting_client.as_deref() != Some(&tag) {
-                        continue;
-                    }
-                    self.starting_client = None;
-                    match command.and_then(|cmd| backend::spawn(Job::Client, cmd, self.tx.clone())) {
-                        Ok(running) => {
-                            self.client = Some(running);
-                            self.client_home = Some(backend::game_home());
-                            self.client_run = None; // A locked menu is not play time.
-                            self.step_aside(cx);
-                        }
-                        Err(error) => self.client_error = Some(error),
-                    }
-                }
                 Msg::Session(session, valtic_executable) => {
                     self.load_auth_statuses(false);
                     if let Some(tag) = self.starting_client.take() {
-                        let mut cmd = match valtic_executable {
-                            Some(path) => backend::client_command_with_executable(&tag, path),
-                            None => backend::client_command(&tag),
-                        };
                         let account::GameSession { file, offline, env } = match session {
                             Ok(pass) => pass,
                             Err(refused) => {
@@ -1333,6 +1314,21 @@ impl Launcher {
                                 continue;
                             }
                         };
+                        // A signed-in account may launch only its installed
+                        // Valtic game build. Never fall back to a guest client
+                        // or an upstream Horizon executable.
+                        let executable = match valtic_executable {
+                            Ok(path) => path,
+                            Err(reason) => {
+                                self.client_error = Some(reason);
+                                self.starting_pack = None;
+                                self.joining = None;
+                                self.quick_play = None;
+                                account::discard_unread_sessions();
+                                continue;
+                            }
+                        };
+                        let mut cmd = backend::client_command_with_executable(&tag, executable);
                         self.owner = Some(true);
                         if let Some(file) = file {
                             cmd.arg("--session-file").arg(file);
@@ -1905,6 +1901,12 @@ impl Launcher {
             self.open_instance_dialog(None);
             return;
         }
+        // No prepare, download or launch until a Minecraft-owning account
+        // has completed the sign-in gate. This applies to native and Java.
+        if self.owner != Some(true) {
+            self.sign_in_to_play();
+            return;
+        }
         if self.selected_instance().is_some_and(|i| i.java.is_some()) {
             if self.owner == Some(true) {
                 self.play();
@@ -1959,24 +1961,12 @@ impl Launcher {
             return;
         }
         if self.owner != Some(true) {
-            // No unauthenticated gameplay, including quick-play servers and Java
-            // instances; only our separately built, hard-locked native menu.
+            // Guest Play has been removed. Do not start the client or even
+            // prepare it until a Minecraft-owning account has signed in.
             self.quick_play = None;
             self.joining = None;
             self.starting_pack = None;
-            let Some(tag) = self.selected().cloned() else {
-                self.client_error = Some("Select a Valtic game version to open the guest menu.".into());
-                return;
-            };
-            if !self.can_start(&tag) {
-                self.client_error = Some("Prepare the selected game version before guest mode.".into());
-                return;
-            }
-            if self.selected_instance().is_some_and(|instance| instance.java.is_some()) {
-                self.client_error = Some("Guest mode is only available with the Valtic native game version.".into());
-                return;
-            }
-            self.start_guest_client(tag);
+            self.sign_in_to_play();
             return;
         }
         let java = self
@@ -2047,21 +2037,6 @@ impl Launcher {
         });
     }
 
-    /// Download and launch the restricted native title screen without player credentials.
-    /// Never pass an existing client's command line or a player session to this mode.
-    fn start_guest_client(&mut self, tag: String) {
-        self.client_error = None;
-        self.crash = None;
-        self.prepare_log.clear();
-        self.client_started = Some(std::time::SystemTime::now());
-        self.starting_client = Some(tag.clone());
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let command = backend::guest_client_command(&tag);
-            let _ = tx.send(Msg::GuestClient(tag, command));
-        });
-    }
-
     /// Whether `tag` can start now ([`starts_now`]): prepared, no preparation under way, no game
     /// running or starting.
     pub(crate) fn can_start(&self, tag: &str) -> bool {
@@ -2124,22 +2099,14 @@ impl Launcher {
             }
             backend::play_step("reading the sign-in");
             let session = account::session_for_game(&backend::game_home());
-            // First launch of the version-matching native game downloads
-            // Valtic's own release in this worker, never in the UI thread.
+            // Only the verified Valtic client installed from a Valtic game
+            // release may start. An absent executable is an error, not a
+            // reason to download a guest EXE or run an upstream binary.
             let valtic_executable = if session.is_ok() {
-                backend::play_step("checking Valtic's branded game client");
-                match backend::signed_valtic_binary(&tag) {
-                    Ok(binary) => Some(binary),
-                    Err(reason) => {
-                        let _ = tx.send(Msg::Line(
-                            Job::Client,
-                            format!("Using the compatible installed game instead: {reason}"),
-                        ));
-                        None
-                    }
-                }
+                backend::play_step("checking installed Valtic game client");
+                backend::signed_valtic_binary(&tag)
             } else {
-                None
+                Err(account::NEEDS_OWNER.to_string())
             };
             backend::play_step("starting the game");
             let _ = tx.send(Msg::Session(session, valtic_executable));
