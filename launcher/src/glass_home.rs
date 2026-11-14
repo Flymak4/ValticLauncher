@@ -163,6 +163,7 @@ impl Launcher {
                 .bg(white(if opened { fill::ACTIVE } else { fill::BUTTON }))
                 .hover(|d| d.bg(white(fill::ACTIVE)))
                 .child(div()
+                    .id(SharedString::from(format!("library-open-{}", instance.id)))
                     .flex().items_center().gap(px(12.))
                     .cursor_pointer()
                     .child(icon)
@@ -548,7 +549,6 @@ impl Launcher {
             None => {
                 let (label, icon) = match &update {
                     Some(_) => (tr("Update"), "download-04"),
-                    None => (tr("Play"), "play"),
                     None => (tr("Play"), "play"),
                 };
                 let press = play_press(ready, self.owner, false);
