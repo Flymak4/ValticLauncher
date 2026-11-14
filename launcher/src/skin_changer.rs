@@ -367,7 +367,7 @@ impl Launcher {
             .child(preview)
             .child(shell::text(theme::night::UI, t.ink).child(name))
             .child(if hovered || editing {
-                button("edit-skin-hover", "Edit skin", Kind::Primary, &t)
+                button(SharedString::from(format!("edit-skin-{id}")), "Edit skin", Kind::Primary, &t)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.skin_open_editor(click_key.clone(), cx);
                     })).into_any_element()
