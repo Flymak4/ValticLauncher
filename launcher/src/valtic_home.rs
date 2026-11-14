@@ -226,7 +226,7 @@ impl Launcher {
 
         div().relative().w_full()
             .min_h(px(if compact { 535. } else { 690. }))
-            .overflow_hidden()
+            // Do not clip the Play chooser / version menus outside the hero.
             .flex().flex_col().items_center().justify_center()
             .px(px(14.)).py(px(32.))
             .children(cherry_backdrop.map(|image| {
