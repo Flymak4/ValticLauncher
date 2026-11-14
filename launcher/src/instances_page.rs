@@ -95,9 +95,10 @@ impl Launcher {
         }) {
             self.library_managing = None;
         }
-        // The inherited profile is never created in a fresh installation's
-        // library. Existing users can explicitly remove their legacy entry;
-        // this persists, even when old world/config files still exist.
+        // A fresh install must NEVER show an automatically created Valtic
+        // instance. Downloaded options, empty directories and mod config files
+        // do not count as a user-created profile. Keep legacy defaults with
+        // actual worlds or saved profile history until explicitly removed.
         let default_removed = instances::default_hidden();
         self.instances.list.retain(|i| {
             i.kind != instances::Kind::Default
@@ -105,9 +106,8 @@ impl Launcher {
                     && (i.name != "Valtic"
                         || !i.played.is_zero()
                         || i.last_played.is_some()
-                        || ["saves", "options.txt", "servers.dat", "mods",
-                            "resourcepacks", "shaderpacks", "config", "screenshots"]
-                            .iter().any(|item| i.home.join(item).exists())))
+                        || i.home.join("saves").read_dir()
+                            .is_ok_and(|mut worlds| worlds.next().is_some())))
         });
         // A picture may have come or gone with the change.
         self.instances
