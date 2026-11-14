@@ -18,13 +18,13 @@ fn project_type(kind: Kind) -> &'static str {
     }
 }
 
-/// The kind of a Modrinth project; its shader packs (the shaders/ format) are not offered. A
-/// data pack says it is a `mod` (most also ship a mod build): the search for data packs marks
-/// its hits, and an install into a world asks for its data pack files.
+/// The kind of a Modrinth project. New standalone data packs use the `datapack`
+/// project type; older hybrid projects can still appear as `mod`, and a data-pack
+/// search marks only those results as data packs. Shader packs are handled separately.
 fn kind_of(project_type: &str) -> Option<Kind> {
     Kind::ALL
         .into_iter()
-        .filter(|k| !matches!(k, Kind::Shader | Kind::DataPack))
+        .filter(|k| !matches!(k, Kind::Shader))
         .find(|k| self::project_type(*k) == project_type)
 }
 
