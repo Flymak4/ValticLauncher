@@ -114,6 +114,16 @@ fn data_packs_are_their_own_kind() {
         (p.kind, p.page.as_str()),
         (Kind::DataPack, "https://modrinth.com/datapack/terralith")
     );
+    // The Modrinth API also publishes standalone data packs as `datapack`,
+    // which must not disappear from search results.
+    let standalone = serde_json::json!({
+        "project_id": "datapack-1", "project_type": "datapack",
+        "slug": "valley-biomes", "title": "Valley Biomes",
+        "categories": ["worldgen"], "versions": [GAME],
+    });
+    let pack = modrinth::parse_hit(&standalone).unwrap();
+    assert_eq!(pack.kind, Kind::DataPack);
+    assert_eq!(pack.page, "https://modrinth.com/datapack/valley-biomes");
     assert_eq!(Kind::DataPack.folder(), None);
 }
 
