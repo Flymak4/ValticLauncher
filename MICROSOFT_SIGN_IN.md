@@ -12,8 +12,10 @@ is passed to **Valtic's own game build**, not Horizon's downloadable launcher or
    put a client secret in a desktop app.
 3. Submit the ID for Minecraft Services review using [Minecraft's app review](https://aka.ms/mce-reviewappid).
    Successful Microsoft sign-in alone does not guarantee Minecraft Services access.
-4. In **Flymak4/ValticLauncher → Settings → Secrets and variables → Actions → Variables**,
-   configure `VALTIC_MSA_CLIENT_ID` with Valtic's own client ID.
+4. Valtic's existing public-client registration `5cc9c47c-7e6e-4012-9ef3-b73b06d73e7a`
+   is included as the default in the Windows build workflow. In
+   **Flymak4/ValticLauncher → Settings → Secrets and variables → Actions → Variables**,
+   you can override `VALTIC_MSA_CLIENT_ID` if Valtic's registration changes.
 5. Until approved, leave `VALTIC_MSA_APPROVED` set to `false`. After Microsoft/Minecraft
    approve Valtic, set this variable to `true`, then rebuild/publish the launcher.
 
@@ -48,3 +50,12 @@ approval.
 Local builds can set the same variables before running Cargo. The legacy
 `HORIZON_MSA_CLIENT_ID` is read only for compatibility with explicitly authorized
 configurations; Valtic builds no longer embed a third-party ID by default.
+
+## Why the November 14 sign-in build failed
+
+An earlier update accidentally deleted the configured default Valtic client ID from
+`.github/workflows/build-valtic-windows.yml`. Because no Actions override was set, the
+launcher was compiled without any Microsoft app registration and showed
+`Microsoft sign-in is not configured`. The registered Valtic ID has been restored; the
+workflow now refuses to publish if neither the Valtic nor an authorized temporary ID is valid.
+Microsoft/Minecraft still control application acceptance and account authentication.
