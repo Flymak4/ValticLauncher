@@ -37,9 +37,11 @@ jobs:
     env:
       # Keep the CRT with the executable, like Horizon's upstream Windows release.
       RUSTFLAGS: -C target-feature=+crt-static
-      # The primary ID belongs to Valtic. A temporary app ID may only be used with
-      # the owner's explicit permission and Microsoft/Minecraft authorization.
-      VALTIC_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID || '' }}
+      # Restore Valtic's registered Entra public client ID as the default.
+      # It is a public application identifier, NOT a secret or Horizon's registration.
+      # The Actions variable still overrides it when a different Valtic ID is needed.
+      # A temporary app ID may only be used with its owner's permission.
+      VALTIC_MSA_CLIENT_ID: ${{ vars.VALTIC_MSA_CLIENT_ID || secrets.VALTIC_MSA_CLIENT_ID || '5cc9c47c-7e6e-4012-9ef3-b73b06d73e7a' }}
       VALTIC_TEMP_MSA_CLIENT_ID: ${{ vars.VALTIC_TEMP_MSA_CLIENT_ID || '' }}
       # The next launcher update selects the approved Valtic app after this is true.
       VALTIC_MSA_APPROVED: ${{ vars.VALTIC_MSA_APPROVED || 'false' }}
@@ -96,9 +98,7 @@ jobs:
             Write-Host 'Microsoft sign-in: Valtic application pending approval (Minecraft Services may refuse).'
             "### Microsoft sign-in: Valtic application awaiting approval" >> $env:GITHUB_STEP_SUMMARY
           } else {
-            Write-Host '::warning::Microsoft sign-in has no authorized client ID. Use Valtic or an explicitly authorized temporary public-client ID.'
-            "### Microsoft sign-in unavailable" >> $env:GITHUB_STEP_SUMMARY
-            "Set VALTIC_MSA_CLIENT_ID or VALTIC_TEMP_MSA_CLIENT_ID as an Actions variable. See MICROSOFT_SIGN_IN.md." >> $env:GITHUB_STEP_SUMMARY
+            throw 'Microsoft sign-in has no authorized client ID. Do not publish a launcher with a broken sign-in button.'
           }
 
       # Embed the new Valtic V / blossom logo into the Windows app and taskbar.
