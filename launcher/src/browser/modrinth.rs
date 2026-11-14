@@ -18,20 +18,26 @@ fn project_type(kind: Kind) -> &'static str {
     }
 }
 
-/// The kind of a Modrinth project. New standalone data packs use the `datapack`
-/// project type; older hybrid projects can still appear as `mod`, and a data-pack
-/// search marks only those results as data packs. Shader packs are handled separately.
+/// The primary Modrinth project type is mod, modpack, resourcepack or shader.
+/// Data packs are exposed through `all_project_types` and converted after search.
+/// Shader packs are not offered in Valtic's Java downloads.
 fn kind_of(project_type: &str) -> Option<Kind> {
     Kind::ALL
         .into_iter()
-        .filter(|k| !matches!(k, Kind::Shader))
+        .filter(|k| !matches!(k, Kind::Shader | Kind::DataPack))
         .find(|k| self::project_type(*k) == project_type)
 }
 
 /// The search's facets (AND of ORs): the kind, the filters, and unless `everything` what runs.
 pub(super) fn facets(query: &Query) -> String {
     let f = &query.filters;
-    let mut all = vec![vec![format!("project_type:{}", project_type(query.kind))]];
+    // The Modrinth v2 search API's primary `project_type` is never "datapack".
+    // A project can publish multiple kinds of version, so search its all_project_types
+    // facet instead. This also finds hybrid mods with a genuine data-pack release.
+    let mut all = vec![vec![match query.kind {
+        Kind::DataPack => "all_project_types:datapack".to_string(),
+        kind => format!("project_type:{}", project_type(kind)),
+    }]];
     match &f.game_version {
         Some(v) => all.push(vec![format!("versions:{v}")]),
         None if !query.everything
