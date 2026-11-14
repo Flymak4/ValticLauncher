@@ -850,15 +850,44 @@ fn valtic_launcher_releases() -> Result<Vec<Release>, String> {
     if !cfg!(windows) {
         return Ok(Vec::new());
     }
-    let url = format!(
-        "https://api.github.com/repos/{VALTIC_UPDATE_REPO}/releases?per_page=10"
-    );
-    let releases = crate::github::json(&url)?;
-    Ok(parse_releases(
-        &releases,
-        Some(VALTIC_UPDATE_ASSET),
-        is_launcher_tag,
-    ))
+    valtic_launcher_releases_with(|url| crate::github::json(url))
+}
+
+/// Game-client releases are published to the same repository, often more than ten
+/// between launcher updates. The build workflow marks ONLY the launcher release
+/// as GitHub's latest (game releases use --latest=false). Check that endpoint
+/// directly instead of relying on a mixed, limited releases page.
+fn valtic_launcher_releases_with(
+    json: impl Fn(&str) -> Result<serde_json::Value, String>,
+) -> Result<Vec<Release>, String> {
+    let api = format!("https://api.github.com/repos/{VALTIC_UPDATE_REPO}");
+    let parse = |releases: &serde_json::Value| {
+        parse_releases(releases, Some(VALTIC_UPDATE_ASSET), is_launcher_tag)
+    };
+    if let Ok(latest) = json(&format!("{api}/releases/latest")) {
+        let found = parse(&serde_json::json!([latest]));
+        if found.iter().any(|release| release.asset.is_some()) {
+            return Ok(found);
+        }
+    }
+
+    // Fallback for repositories where "latest" is unset or points to a game
+    // release. Use the full page before looking up launcher tags directly.
+    let found = parse(&json(&format!("{api}/releases?per_page=100"))?);
+    if found.iter().any(|release| release.asset.is_some()) {
+        return Ok(found);
+    }
+    if let Ok(refs) = json(&format!("{api}/git/matching-refs/tags/launcher@")) {
+        for tag in newest_launcher_tags(&refs).into_iter().take(5) {
+            if let Ok(release) = json(&format!("{api}/releases/tags/{tag}")) {
+                let found = parse(&serde_json::json!([release]));
+                if found.iter().any(|release| release.asset.is_some()) {
+                    return Ok(found);
+                }
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// The launcher tags in GitHub's matching-refs answer, newest first.
@@ -5920,6 +5949,66 @@ pub fn {f}("
             own_tag_of(None, None),
             format!("launcher@{}", env!("CARGO_PKG_VERSION"))
         );
+    }
+
+    #[test]
+    fn valtic_updater_uses_latest_launcher_even_when_game_releases_fill_the_feed() {
+        let latest = serde_json::json!({
+            "tag_name": "launcher@0.2.101",
+            "name": "Valtic Launcher 0.2.101",
+            "assets": [{
+                "name": VALTIC_UPDATE_ASSET,
+                "browser_download_url": "https://example.test/valtic-launcher-windows-x64.zip",
+                "size": 42
+            }]
+        });
+        let found = valtic_launcher_releases_with(|url| {
+            assert!(url.ends_with("/releases/latest"), "unexpected request: {url}");
+            Ok(latest.clone())
+        })
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].tag, "launcher@0.2.101");
+        assert_eq!(
+            launcher_update_from(&found, "launcher@0.2.98")
+                .map(|release| release.tag),
+            Some("launcher@0.2.101".into())
+        );
+    }
+
+    #[test]
+    fn valtic_updater_falls_back_to_tag_after_a_page_full_of_game_releases() {
+        let game = serde_json::json!({
+            "tag_name": "v1.0.101",
+            "assets": [{"name": "valtic-windows-x64.zip", "size": 10}]
+        });
+        let launcher = serde_json::json!({
+            "tag_name": "launcher@0.2.101",
+            "assets": [{
+                "name": VALTIC_UPDATE_ASSET,
+                "browser_download_url": "https://example.test/valtic-launcher-windows-x64.zip",
+                "size": 42
+            }]
+        });
+        let found = valtic_launcher_releases_with(|url| {
+            if url.ends_with("/releases/latest") {
+                Ok(game.clone())
+            } else if url.ends_with("/releases?per_page=100") {
+                Ok(serde_json::Value::Array(vec![game.clone(); 100]))
+            } else if url.ends_with("/git/matching-refs/tags/launcher@") {
+                Ok(serde_json::json!([
+                    {"ref": "refs/tags/launcher@0.2.98"},
+                    {"ref": "refs/tags/launcher@0.2.101"}
+                ]))
+            } else if url.ends_with("/releases/tags/launcher@0.2.101") {
+                Ok(launcher.clone())
+            } else {
+                panic!("unexpected request: {url}");
+            }
+        })
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].tag, "launcher@0.2.101");
     }
 
     /// The update path to 0.2 (docs/versioning.md): launchers from before it take the last
