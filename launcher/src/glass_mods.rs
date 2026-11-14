@@ -54,15 +54,30 @@ impl Launcher {
         let instance = self
             .selected_instance()
             .map_or_else(|| "Valtic".to_owned(), |i| i.name.clone());
-        let head = ui::page_head(
-            tr("Mods"),
+        let target_line = self.mods.java_for(self.mods.kind).map(|target| {
             trf(
-                "Everything you install goes into {instance}. Pick another instance on the left to fill that one.",
-                &[("instance", &instance)],
-            ),
-        )
-        .pt_0()
-        .mb_0();
+                "Filtered for {game}. Incompatible downloads cannot be installed.",
+                &[("game", &target.describe(self.mods.kind))],
+            )
+        });
+        let head = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                ui::page_head(
+                    tr("Mods"),
+                    trf(
+                        "Everything you install goes into {instance}. Pick another instance on the left to fill that one.",
+                        &[("instance", &instance)],
+                    ),
+                )
+                .pt_0()
+                .mb_0(),
+            )
+            .children(target_line.map(|line| {
+                ui::text(12., FontWeight::MEDIUM, ink::QUIET).child(line)
+            }));
         let open = self.mods.kind;
         let mut tabs = div().flex().flex_none().items_center().gap(px(4.));
         for (kind, label, _) in KINDS {
