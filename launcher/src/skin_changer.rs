@@ -168,6 +168,56 @@ fn skin_face(path: &Path) -> Option<Arc<RenderImage>> {
 }
 
 impl Launcher {
+    /// The existing wardrobe renderer shows a full-body player, not a flat skin thumbnail.
+    fn skin_preview_dress(&mut self, cx: &mut Context<Self>)
+        -> Option<gpui::Entity<wardrobe_page::viewer::Viewer>>
+    {
+        let account = self.accounts.selected()?.clone();
+        let id = self.skin_editing.clone().unwrap_or_else(|| "current".into());
+        let slim = if self.skin_editing.is_some() {
+            self.skin_slim
+        } else {
+            account.skin.as_ref().is_some_and(|(_, m)| m.eq_ignore_ascii_case("slim"))
+        };
+        let key = (if id == "current" {
+            format!("current:{}:{:?}", account.uuid, account.skin)
+        } else {
+            id.clone()
+        }, slim);
+        let preview = self.skin_preview
+            .get_or_insert_with(|| cx.new(|_| wardrobe_page::viewer::Viewer::sized(260., 360.)))
+            .clone();
+        if self.skin_preview_for.as_ref() != Some(&key) {
+            let texture = if id == "current" {
+                wardrobe_page::skin(&account, &self.game_resources()).map(|(skin, _)| skin)
+            } else {
+                std::fs::read(&id).ok()
+                    .and_then(|png| wardrobe_page::skin_texture(&png))
+            }.unwrap_or_else(wardrobe_page::plain_skin);
+            let outfit = wardrobe_page::viewer::Outfit {
+                skin: texture,
+                slim,
+                items: Vec::new(),
+            };
+            self.skin_preview_for = Some(key);
+            let to = preview.clone();
+            cx.defer(move |cx| to.update(cx, |viewer, cx| viewer.dress(outfit, false, cx)));
+        }
+        Some(preview)
+    }
+
+    fn skin_preview_drag(cx: &mut Context<Self>) -> impl Fn(bool, &mut App) + Clone + 'static {
+        let page = cx.entity().downgrade();
+        move |dragging, cx: &mut App| {
+            let _ = page.update(cx, |this, cx| {
+                if this.skin_preview_dragging != dragging {
+                    this.skin_preview_dragging = dragging;
+                    cx.notify();
+                }
+            });
+        }
+    }
+
     pub(super) fn choose_minecraft_skin(&mut self, cx: &mut Context<Self>) {
         if self.skin_uploading { return; }
         let paths = cx.prompt_for_paths(PathPromptOptions {
@@ -189,6 +239,7 @@ impl Launcher {
                     Ok(path) => {
                         this.skin_editing = Some(path.to_string_lossy().into_owned());
                         this.skin_slim = false;
+                        this.skin_preview_for = None;
                         this.skin_status = Some("Skin saved. Choose Wide or Slim, then Apply.".into());
                     }
                     Err(e) => this.skin_status = Some(e),
@@ -236,6 +287,7 @@ impl Launcher {
                 match result {
                     Ok(()) => {
                         this.skin_status = Some("Skin applied! Rejoin Minecraft to see it.".into());
+                        this.skin_preview_for = None;
                         this.load_auth_statuses(true);
                     }
                     Err(e) => this.skin_status = Some(e),
@@ -347,19 +399,23 @@ impl Launcher {
         }
         let player = selected.as_ref().map(|a| a.name.clone())
             .unwrap_or_else(|| "Sign in to Minecraft".into());
-        let face = self.profile_heads.draw(
-            selected.as_ref().map(|a| a.uuid.as_str()), 160., self.scale, &t
-        );
+        let viewer = self.skin_preview_dress(cx);
+        let is_dragging = self.skin_preview_dragging;
         let left = div().flex().flex_col().items_center()
             .w(px(310.)).flex_none().gap(px(20.)).p(px(24.))
             .rounded(px(22.)).bg(t.plate_soft)
             .child(shell::text(theme::night::TITLE, t.ink).child("Skin Selector"))
             .child(shell::text(theme::night::UI, t.ink_soft).child(player))
             .child(div().flex().items_center().justify_center()
-                .h(px(280.)).w_full().rounded(px(20.))
-                .bg(t.plate).child(face))
+                .h(px(380.)).w_full().rounded(px(20.))
+                .bg(t.plate)
+                .children(viewer.map(|preview| {
+                    wardrobe_page::viewer::frame(
+                        preview, (260., 360.), is_dragging, Self::skin_preview_drag(cx)
+                    )
+                })))
             .child(shell::text(theme::night::UI, t.ink_soft)
-                .child("Your Minecraft account skin"))
+                .child("Drag to rotate • Scroll to zoom"))
             .child(button("skin-pick-upload", "Add skin PNG", Kind::Primary, &t)
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_minecraft_skin(cx))));
         let mut cards = div().flex().flex_wrap().gap(px(14.));
