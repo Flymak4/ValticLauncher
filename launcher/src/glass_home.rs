@@ -253,6 +253,71 @@ impl Launcher {
                         this.library_context_menu = None;
                         cx.notify();
                     }));
+                // The same practical actions work from a right-click without first
+                // expanding the card. They operate on the clicked instance, not whichever
+                // one happened to be selected on the Home page.
+                let edit = instance.clone();
+                menu = menu.child(
+                    ui::menu_row(
+                        format!("library-context-edit-{}", instance.id),
+                        "sliders",
+                        tr("Edit instance"),
+                        false,
+                        &self.theme,
+                    ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.library_context_menu = None;
+                        this.open_instance_dialog(Some(edit.clone()));
+                        cx.notify();
+                    })),
+                );
+                let icon_target = instance.clone();
+                menu = menu.child(
+                    ui::menu_row(
+                        format!("library-context-icon-{}", instance.id),
+                        "image-01",
+                        tr("Change icon"),
+                        false,
+                        &self.theme,
+                    ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.library_context_menu = None;
+                        this.open_instance_dialog(Some(icon_target.clone()));
+                        this.choose_instance_picture(cx);
+                        cx.notify();
+                    })),
+                );
+                let mod_target = instance.clone();
+                menu = menu.child(
+                    ui::menu_row(
+                        format!("library-context-mods-{}", instance.id),
+                        "package-01",
+                        tr("Manage mods"),
+                        false,
+                        &self.theme,
+                    ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.library_context_menu = None;
+                        this.select_instance(&mod_target);
+                        this.mods_find_for_instance();
+                        this.go(Page::Mods);
+                        cx.notify();
+                    })),
+                );
+                if !busy && matches!(instance.kind, instances::Kind::Default | instances::Kind::Own) {
+                    let copy_target = instance.clone();
+                    menu = menu.child(
+                        ui::menu_row(
+                            format!("library-context-copy-{}", instance.id),
+                            "copy-01",
+                            tr("Duplicate instance"),
+                            false,
+                            &self.theme,
+                        ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.library_context_menu = None;
+                            this.select_instance(&copy_target);
+                            this.start_copy();
+                            cx.notify();
+                        })),
+                    );
+                }
                 if deletable {
                     let id = instance.id.clone();
                     menu = menu.child(
