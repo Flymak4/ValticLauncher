@@ -611,6 +611,7 @@ fn check_with(
             Ok(mc) => {
                 secrets = Secrets {
                     owns: secrets.owns,
+                    msa_client_id: secrets.msa_client_id.clone(),
                     ..Secrets::new(secrets.refresh_token, mc)
                 }
             }
