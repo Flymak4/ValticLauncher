@@ -95,11 +95,17 @@ impl Launcher {
         }) {
             self.library_managing = None;
         }
-        // Hide an empty inherited default profile on a fresh install.
-        // Keep older instances with saved worlds or settings intact.
+        // Do not offer the implicit Valtic profile on a fresh installation.
+        // A launcher-generated horizon-player.txt is not evidence that anyone
+        // created an instance. Preserve existing legacy players' worlds,
+        // settings, custom names and play history without moving their data.
         self.instances.list.retain(|i| {
             i.kind != instances::Kind::Default
-                || ["saves", "options.txt", "horizon-player.txt"]
+                || i.name != "Valtic"
+                || !i.played.is_zero()
+                || i.last_played.is_some()
+                || ["saves", "options.txt", "servers.dat", "mods",
+                    "resourcepacks", "shaderpacks", "config", "screenshots"]
                     .iter()
                     .any(|item| i.home.join(item).exists())
         });

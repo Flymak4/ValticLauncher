@@ -1901,6 +1901,10 @@ impl Launcher {
         if self.client.is_some() || self.starting_client.is_some() || self.preparing {
             return;
         }
+        if self.selected_instance().is_none() {
+            self.open_instance_dialog(None);
+            return;
+        }
         if self.selected_instance().is_some_and(|i| i.java.is_some()) {
             if self.owner == Some(true) {
                 self.play();
@@ -1950,6 +1954,10 @@ impl Launcher {
     }
 
     fn play(&mut self) {
+        if self.selected_instance().is_none() {
+            self.open_instance_dialog(None);
+            return;
+        }
         if self.owner != Some(true) {
             // No unauthenticated gameplay, including quick-play servers and Java
             // instances; only our separately built, hard-locked native menu.
@@ -3526,6 +3534,15 @@ impl Launcher {
 
     fn play_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
+        // A brand-new installation starts with a genuinely empty library.
+        // Keep the cherry-blossom Home layout; Play and the instance picker
+        // both offer Create Instance until the player makes their own.
+        if self.selected_instance().is_none() && t.glass {
+            return div()
+                .flex().flex_col().gap(px(24.))
+                .child(self.valtic_home_head("", false, cx))
+                .child(self.valtic_home_bottom(div(), cx));
+        }
         if self.selected_instance().is_none() {
             return div()
                 .flex()

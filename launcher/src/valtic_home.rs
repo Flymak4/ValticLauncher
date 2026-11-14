@@ -149,6 +149,103 @@ impl Launcher {
                     .child(motd.to_string())))
     }
 
+
+    /// Home's instance selector. Picking an instance changes the Play target;
+    /// it never downloads a different version or starts the game by itself.
+    fn valtic_instance_picker(&self, cx: &mut Context<Self>) -> Div {
+        let theme = self.theme;
+        let selected_id = self.selected_instance().map(|i| i.id.clone());
+        let selected_name = self.selected_instance()
+            .map(|i| i.name.clone())
+            .unwrap_or_else(|| "Choose an instance".to_string());
+        let open = self.picker.open;
+        let button = div()
+            .id("valtic-instance-picker")
+            .w_full()
+            .h(px(TALL))
+            .flex().items_center().justify_between().gap(px(16.))
+            .px(px(16.))
+            .rounded(px(radius::LARGE))
+            .bg(ui::color(0x39263b).opacity(0.90))
+            .hover(|d| d.bg(ui::color(0x54344d)))
+            .cursor_pointer()
+            .child(div().flex().flex_col().min_w_0()
+                .child(ui::text(12., FontWeight::NORMAL, ink::QUIET)
+                    .child("Instance"))
+                .child(ui::text(15., FontWeight::MEDIUM, ink::FULL)
+                    .truncate().child(selected_name)))
+            .child(ui::icon("arrow-down-01", 18., white(ink::NOTE)))
+            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                if !this.closed_by_this_press(event) {
+                    this.home_menu = HomeMenu::None;
+                    this.picker.open = !this.picker.open;
+                }
+                cx.notify();
+            }));
+        let mut wrap = div().relative().w_full().child(button);
+        if open {
+            let mut menu = ui::popover(300.)
+                .id("valtic-instance-menu")
+                .occlude()
+                .bg(ui::color(0x16112b).opacity(0.96))
+                .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.picker.open = false;
+                    this.menu_closed_at = Some(event.position);
+                    cx.notify();
+                }));
+            let playable: Vec<_> = self.instances.list.iter()
+                .filter(|i| matches!(i.kind,
+                    instances::Kind::Default | instances::Kind::Own))
+                .cloned().collect();
+            if playable.is_empty() {
+                menu = menu.child(
+                    ui::text(12., FontWeight::NORMAL, ink::SOFT)
+                        .px(px(12.)).py(px(10.))
+                        .child("No instances yet. Create one to start playing.")
+                );
+            }
+            for instance in playable {
+                let chosen = selected_id.as_deref() == Some(instance.id.as_str());
+                let note = instance.java.as_ref()
+                    .map(|j| format!("Minecraft {}", j.minecraft))
+                    .unwrap_or_else(|| "Valtic Client".to_string());
+                let target = instance.clone();
+                menu = menu.child(
+                    ui::menu_item(
+                        SharedString::from(format!("valtic-choose-{}", instance.id)),
+                        instance.name.into(),
+                        note,
+                        false,
+                        &theme,
+                    )
+                    .when(chosen, |d| d.child(
+                        ui::icon("tick-02", 17., ui::color(self.look.accent_soft))
+                    ))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.select_instance(&target);
+                        this.picker.open = false;
+                        cx.notify();
+                    }))
+                );
+            }
+            menu = menu.child(
+                ui::menu_row(
+                    "valtic-create-instance", "plus-sign",
+                    "Create Instance", false, &theme,
+                ).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.picker.open = false;
+                    this.open_instance_dialog(None);
+                    cx.notify();
+                }))
+            );
+            wrap = wrap.child(deferred(
+                div().absolute().top(px(TALL + 8.)).left_0()
+                    .child(menu.max_h(px(380.)).overflow_y_scroll())
+            ).with_priority(1));
+        }
+        wrap
+    }
+
     pub(super) fn valtic_home_head(
         &mut self, tag: &str, prepared: bool, cx: &mut Context<Self>,
     ) -> Div {
@@ -196,9 +293,7 @@ impl Launcher {
         // Welcome hero. Keep the real native Play/picker controls on the right.
         let play = div().flex().flex_col().gap(px(12.))
             .child(self.play_group(tag, ready, cx))
-            .children(java.is_none().then(|| self.glass_picker(cx)));
-        let current = self.selected_instance().map(|i| i.name.clone())
-            .unwrap_or_else(|| "Choose an instance".to_string());
+            .child(self.valtic_instance_picker(cx));
         let banner = div().relative().flex_1().min_w_0()
             .h(px(if compact { 215. } else { 245. }))
             .rounded(px(20.)).overflow_hidden()
@@ -230,14 +325,7 @@ impl Launcher {
             .p(px(15.)).rounded(px(20.))
             .border_1().border_color(ui::color(0xffb8d5).opacity(0.20))
             .bg(ui::color(0x241629).opacity(0.96))
-            .child(play)
-            .child(div().flex().items_center().gap(px(12.))
-                .p(px(13.)).rounded(px(13.))
-                .bg(ui::color(0x130e1b).opacity(0.8))
-                .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
-                    .truncate().child(current))
-                .child(ui::text(12., FontWeight::NORMAL, ink::SOFT)
-                    .ml_auto().child("Selected instance")));
+            .child(play);
         div().w_full().flex().flex_wrap().gap(px(18.))
             .child(banner)
             .child(play_panel)
