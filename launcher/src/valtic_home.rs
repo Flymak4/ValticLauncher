@@ -2,7 +2,9 @@
 //! Scenes are read from the *selected version's* official game panoramas.
 //! No generated or unrelated version artwork is used.
 use super::*;
-use crate::glass_ui::{self as ui};
+use crate::glass_home::HomeMenu;
+use crate::glass_ui::{self as ui, white};
+use gpui::deferred;
 use horizon_theme::glass::{ink, radius};
 use std::sync::Arc;
 
@@ -162,7 +164,7 @@ impl Launcher {
         let button = div()
             .id("valtic-instance-picker")
             .w_full()
-            .h(px(TALL))
+            .h(px(70.))
             .flex().items_center().justify_between().gap(px(16.))
             .px(px(16.))
             .rounded(px(radius::LARGE))
@@ -239,7 +241,7 @@ impl Launcher {
                 }))
             );
             wrap = wrap.child(deferred(
-                div().absolute().top(px(TALL + 8.)).left_0()
+                div().absolute().top(px(70. + 8.)).left_0()
                     .child(menu.max_h(px(380.)).overflow_y_scroll())
             ).with_priority(1));
         }
