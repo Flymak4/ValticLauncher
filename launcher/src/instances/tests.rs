@@ -334,11 +334,16 @@ fn deleted_instances_go_to_the_trash_and_are_forgotten() {
     );
     assert!(find_in(&list_in(&home, &data), "Survival").is_err());
     assert!(!Store::load(&data).instances.contains_key("survival"));
-    // The game's home stays; an imported pack goes like an instance.
-    assert!(delete_in(&home, &data, DEFAULT, &to_trash)
-        .unwrap_err()
-        .contains("can't be deleted"));
+    // Removing the inherited profile hides it in the library, but never
+    // trashes the shared root folder containing all players' other instances.
+    let hidden = delete_in(&home, &data, DEFAULT, &to_trash).unwrap();
+    assert_eq!(hidden.kind, Kind::Default);
+    assert!(Store::load(&data).default_hidden);
     assert!(home.join("saves/World/level.dat").is_file());
+    assert!(home.join("instances").is_dir());
+    assert!(!trash.join("home").exists());
+    assert!(delete_in(&home, &data, DEFAULT, &to_trash)
+        .unwrap_err().contains("already removed"));
     delete_in(&home, &data, "small-pack", &to_trash).unwrap();
     assert!(trash
         .join("small-pack/home/saves/Modded/level.dat")
