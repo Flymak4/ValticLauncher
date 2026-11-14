@@ -237,6 +237,8 @@ impl Launcher {
                         &self.theme,
                     ).w_full().on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.select_instance(&mods);
+                        this.mods_load();
+                        this.mods_find_for_instance();
                         this.go(Page::Mods);
                         cx.notify();
                     }))));
@@ -297,6 +299,7 @@ impl Launcher {
                     ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.library_context_menu = None;
                         this.select_instance(&mod_target);
+                        this.mods_load();
                         this.mods_find_for_instance();
                         this.go(Page::Mods);
                         cx.notify();
