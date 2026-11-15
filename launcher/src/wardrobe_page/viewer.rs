@@ -109,7 +109,7 @@ impl Viewer {
 
     /// Plays `motion` (an emote) on the player model, its items following their bones, again
     /// each time it ends; None stops it after this time.
-    pub(super) fn play_again(
+    pub(crate) fn play_again(
         &mut self,
         motion: Option<Arc<dyn BodyMotion>>,
         cx: &mut Context<Self>,
