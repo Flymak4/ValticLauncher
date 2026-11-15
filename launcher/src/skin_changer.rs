@@ -167,29 +167,93 @@ fn skin_face(path: &Path) -> Option<Arc<RenderImage>> {
     Some(art::bake(&pixels, 8, 8, 12., 1.))
 }
 
+
+/* Native, compact glass surfaces shared by the skins library. */
+fn skin_surface() -> Div {
+    div()
+        .rounded(px(22.))
+        .border_1()
+        .border_color(gpui::rgb(0x64415f))
+        .bg(gpui::linear_gradient(
+            145.,
+            gpui::linear_color_stop(gpui::rgb(0x302334), 0.),
+            gpui::linear_color_stop(gpui::rgb(0x241b2c), 1.),
+        ))
+}
+
+/// Small falling cherry petals. GPUI animates the visual elements without polling Minecraft.
+fn skin_petal(id: &'static str, x: f32, y: f32, distance: f32) -> gpui::AnyElement {
+    let petal = div()
+        .absolute()
+        .left(px(x))
+        .top(px(y))
+        .w(px(9.))
+        .h(px(14.))
+        .rounded(px(8.))
+        .bg(gpui::rgb(0xffa5ce))
+        .opacity(0.62);
+    if crate::sky::motion() == crate::sky::Motion::Still {
+        petal.into_any_element()
+    } else {
+        petal.with_animation(
+            id,
+            gpui::Animation::new(std::time::Duration::from_secs(7))
+                .repeat()
+                .with_easing(gpui::ease_in_out),
+            move |d, p| d.top(px(y + distance * p))
+                .left(px(x - 22. * p))
+                .opacity(0.60 - 0.42 * p),
+        ).into_any_element()
+    }
+}
+
+/// Subtle breathing/arm motion for the skin preview; no paid emotes or account required.
+struct SkinIdle;
+impl horizon_cosmetics::viewer::BodyMotion for SkinIdle {
+    fn length(&self) -> f32 { 72.0 }
+    fn pose(&self, ticks: f32, set: &mut dyn FnMut(&str, horizon_cosmetics::Pose)) {
+        let phase = ticks * std::f32::consts::TAU / 72.0;
+        set("right_arm", [-5., 2., 0., 0.06 + 0.09 * phase.sin(), 0., 0., 1., 1., 1.]);
+        set("left_arm", [5., 2., 0., -0.06 - 0.09 * phase.sin(), 0., 0., 1., 1., 1.]);
+    }
+}
+
 impl Launcher {
-    /// The existing wardrobe renderer shows a full-body player, not a flat skin thumbnail.
+    /// Always show a player: saved PNGs work offline, and a plain fallback works before login.
     fn skin_preview_dress(&mut self, cx: &mut Context<Self>)
         -> Option<gpui::Entity<wardrobe_page::viewer::Viewer>>
     {
-        let account = self.accounts.selected()?.clone();
-        let id = self.skin_editing.clone().unwrap_or_else(|| "current".into());
+        let account = self.accounts.selected().cloned();
+        let id = self.skin_editing.clone().unwrap_or_else(|| {
+            if account.is_some() {
+                "current".to_owned()
+            } else {
+                saved_skins().into_iter().next()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "default".to_owned())
+            }
+        });
         let slim = if self.skin_editing.is_some() {
             self.skin_slim
+        } else if id == "current" {
+            account.as_ref().and_then(|a| a.skin.as_ref())
+                .is_some_and(|(_, m)| m.eq_ignore_ascii_case("slim"))
         } else {
-            account.skin.as_ref().is_some_and(|(_, m)| m.eq_ignore_ascii_case("slim"))
+            slim_for(Path::new(&id))
         };
         let key = (if id == "current" {
-            format!("current:{}:{:?}", account.uuid, account.skin)
-        } else {
-            id.clone()
-        }, slim);
+            account.as_ref()
+                .map(|a| format!("current:{}:{:?}", a.uuid, a.skin))
+                .unwrap_or_else(|| "default".to_owned())
+        } else { id.clone() }, slim);
         let preview = self.skin_preview
             .get_or_insert_with(|| cx.new(|_| wardrobe_page::viewer::Viewer::sized(260., 360.)))
             .clone();
         if self.skin_preview_for.as_ref() != Some(&key) {
             let texture = if id == "current" {
-                wardrobe_page::skin(&account, &self.game_resources()).map(|(skin, _)| skin)
+                account.as_ref().and_then(|a| {
+                    wardrobe_page::skin(a, &self.game_resources()).map(|(skin, _)| skin)
+                })
             } else {
                 std::fs::read(&id).ok()
                     .and_then(|png| wardrobe_page::skin_texture(&png))
@@ -200,8 +264,16 @@ impl Launcher {
                 items: Vec::new(),
             };
             self.skin_preview_for = Some(key);
+            let motion = crate::sky::motion() != crate::sky::Motion::Still;
             let to = preview.clone();
-            cx.defer(move |cx| to.update(cx, |viewer, cx| viewer.dress(outfit, false, cx)));
+            cx.defer(move |cx| {
+                to.update(cx, |viewer, cx| {
+                    viewer.dress(outfit, motion, cx);
+                    viewer.play_again(
+                        if motion { Some(Arc::new(SkinIdle)) } else { None }, cx
+                    );
+                });
+            });
         }
         Some(preview)
     }
@@ -351,28 +423,41 @@ impl Launcher {
         let editing = self.skin_editing.as_deref() == Some(id.as_str());
         let key = id.clone();
         let click_key = id.clone();
-        let preview = div().flex().justify_center().items_center().h(px(124.))
+        let preview = div()
+            .w_full().h(px(116.))
+            .flex().justify_center().items_center()
+            .rounded(px(12.))
+            .bg(gpui::rgb(0x382b3b))
             .child(match image {
                 Some(face) => img(face).size(px(96.)).into_any_element(),
-                None => self.profile_heads.draw(self.accounts.selected().map(|a| a.uuid.as_str()),
-                    96., self.scale, &t).into_any_element(),
+                None => self.profile_heads.draw(
+                    self.accounts.selected().map(|a| a.uuid.as_str()),
+                    96., self.scale, &t
+                ).into_any_element(),
             });
         div()
             .id(SharedString::from(format!("skin-card-{id}")))
             .flex().flex_col().items_center().justify_between()
-            .gap(px(8.)).w(px(172.)).h(px(212.)).p(px(12.))
-            .rounded(px(18.)).bg(t.plate_soft)
-            .border_1().border_color(if editing { t.accent } else { t.rule })
-            .hover(|s| s.border_color(t.accent))
+            .gap(px(8.)).w(px(170.)).h(px(211.)).p(px(11.))
+            .rounded(px(18.))
+            .bg(gpui::rgb(if editing { 0x432b43 } else { 0x302637 }))
+            .border_1()
+            .border_color(if editing { t.accent } else { gpui::rgb(0x59435a).into() })
+            .hover(|s| s.bg(gpui::rgb(0x493149)).border_color(t.accent))
+            .cursor_pointer()
             .child(preview)
-            .child(shell::text(theme::night::UI, t.ink).child(name))
+            .child(shell::text(theme::night::UI, t.ink)
+                .max_w(px(149.)).truncate().child(name))
             .child(if hovered || editing {
-                button(SharedString::from(format!("edit-skin-{id}")), "Edit skin", Kind::Primary, &t)
+                button(SharedString::from(format!("edit-skin-{id}")),
+                    "Edit skin", Kind::Primary, &t)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.skin_open_editor(click_key.clone(), cx);
                     })).into_any_element()
             } else {
-                div().h(px(34.)).into_any_element()
+                shell::text(theme::MICRO, t.ink_soft)
+                    .child(if id == "current" { "MINECRAFT" } else { "HOVER TO EDIT" })
+                    .into_any_element()
             })
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
@@ -393,117 +478,235 @@ impl Launcher {
             self.skin_capes_loaded = false;
             self.skin_cape_busy = false;
             self.skin_capes.clear();
+            self.skin_preview_for = None;
         }
         if selected.is_some() && !self.skin_capes_loaded && !self.skin_cape_busy {
             self.skin_refresh_capes(cx);
         }
+        let saved = saved_skins();
         let player = selected.as_ref().map(|a| a.name.clone())
-            .unwrap_or_else(|| "Sign in to Minecraft".into());
+            .unwrap_or_else(|| "Preview skins offline".to_owned());
         let viewer = self.skin_preview_dress(cx);
-        let is_dragging = self.skin_preview_dragging;
-        let left = div().flex().flex_col().items_center()
-            .w(px(310.)).flex_none().gap(px(20.)).p(px(24.))
-            .rounded(px(22.)).bg(t.plate_soft)
-            .child(shell::text(theme::night::TITLE, t.ink).child("Skin Selector"))
-            .child(shell::text(theme::night::UI, t.ink_soft).child(player))
-            .child(div().flex().items_center().justify_center()
-                .h(px(380.)).w_full().rounded(px(20.))
-                .bg(t.plate)
-                .children(viewer.map(|preview| {
-                    wardrobe_page::viewer::frame(
-                        preview, (260., 360.), is_dragging, Self::skin_preview_drag(cx)
-                    )
-                })))
-            .child(shell::text(theme::night::UI, t.ink_soft)
-                .child("Drag to rotate • Scroll to zoom"))
-            .child(button("skin-pick-upload", "Add skin PNG", Kind::Primary, &t)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_minecraft_skin(cx))));
-        let mut cards = div().flex().flex_wrap().gap(px(14.));
-        cards = cards.child(
-            div().flex().flex_col().items_center().justify_center()
-                .gap(px(12.)).w(px(172.)).h(px(212.))
-                .rounded(px(18.)).border_1().border_color(t.rule)
-                .bg(t.plate_soft)
-                .child(shell::text(theme::night::TITLE, t.accent).child("+"))
-                .child(shell::text(theme::night::UI, t.ink).child("Add skin"))
-                .child(shell::text(theme::MICRO, t.ink_soft).child("Choose a PNG"))
-                .id("skin-add-card")
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_minecraft_skin(cx)))
-        );
+        let dragging = self.skin_preview_dragging;
+
+        let header = div()
+            .relative().overflow_hidden()
+            .h(px(116.)).w_full()
+            .rounded(px(22.))
+            .bg(gpui::linear_gradient(
+                105.,
+                gpui::linear_color_stop(gpui::rgb(0x322135), 0.),
+                gpui::linear_color_stop(gpui::rgb(0x4d294b), 1.),
+            ))
+            .child(gpui::svg().path("valtic/cherry-scene.svg")
+                .absolute().right_0().top(px(-82.))
+                .w(px(600.)).h(px(280.)).opacity(0.20))
+            .child(div().absolute().left_0().top_0().size_full()
+                .bg(gpui::linear_gradient(
+                    90.,
+                    gpui::linear_color_stop(gpui::rgb(0x302136).opacity(0.98), 0.),
+                    gpui::linear_color_stop(gpui::rgb(0x302136).opacity(0.15), 1.),
+                )))
+            .child(skin_petal("skin-header-petal-a", 560., 8., 65.))
+            .child(skin_petal("skin-header-petal-b", 870., -12., 100.))
+            .child(div().relative().flex().flex_col().gap(px(8.)).p(px(25.))
+                .child(div().flex().items_center().gap(px(12.))
+                    .child(div().w(px(5.)).h(px(36.))
+                        .rounded_full().bg(gpui::rgb(0xff92c6)))
+                    .child(shell::text(theme::night::TITLE, t.ink)
+                        .text_size(px(29.)).child("Minecraft Skins")))
+                .child(shell::text(theme::night::UI, t.ink_soft)
+                    .child("Your saved skins, personal preview and official capes.")));
+
+        let left = skin_surface()
+            .w(px(330.)).flex_none()
+            .flex().flex_col().gap(px(15.)).p(px(20.))
+            .child(div().flex().items_center().gap(px(11.))
+                .child(gpui::svg().path("valtic/cherry-emblem.svg")
+                    .size(px(29.)))
+                .child(div().flex().flex_col().gap(px(3.))
+                    .child(shell::text(theme::night::TITLE, t.ink)
+                        .child("Skin Preview"))
+                    .child(shell::text(theme::MICRO, t.ink_soft).child(player))))
+            .child(div().relative().overflow_hidden()
+                .w_full().h(px(393.)).rounded(px(19.))
+                .border_1().border_color(gpui::rgb(0x694260))
+                .bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(gpui::rgb(0x382637), 0.),
+                    gpui::linear_color_stop(gpui::rgb(0x221a2b), 1.),
+                ))
+                .child(div().absolute().bottom(px(33.)).left(px(36.))
+                    .w(px(220.)).h(px(6.)).rounded_full()
+                    .bg(gpui::rgb(0xe26ea8)).opacity(0.65))
+                .child(skin_petal("skin-preview-petal-a", 34., 40., 310.))
+                .child(skin_petal("skin-preview-petal-b", 242., 3., 345.))
+                .child(div().absolute().top(px(12.)).left(px(14.))
+                    .child(shell::text(theme::MICRO, gpui::rgb(0xffb3d5).into())
+                        .child("3D PREVIEW")))
+                .child(div().absolute().top(px(17.)).left(px(14.))
+                    .children(viewer.map(|preview| {
+                        wardrobe_page::viewer::frame(
+                            preview, (260., 360.), dragging, Self::skin_preview_drag(cx)
+                        )
+                    }))))
+            .child(shell::text(theme::MICRO, t.ink_soft)
+                .child("Drag to rotate  ·  Scroll to zoom"))
+            .child(button("skin-pick-upload", "✦ Upload Skin PNG", Kind::Primary, &t)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.choose_minecraft_skin(cx);
+                })));
+
+        let mut cards = div().flex().flex_wrap().gap(px(13.));
+        cards = cards.child(div().id("skin-add-card")
+            .flex().flex_col().items_center().justify_center()
+            .gap(px(11.)).w(px(170.)).h(px(211.))
+            .rounded(px(18.)).border_1()
+            .border_color(gpui::rgb(0x855078))
+            .bg(gpui::rgb(0x302439))
+            .cursor_pointer()
+            .hover(|s| s.bg(gpui::rgb(0x492b48))
+                .border_color(gpui::rgb(0xf898cc)))
+            .child(shell::text(theme::night::TITLE, t.accent)
+                .text_size(px(35.)).child("+"))
+            .child(shell::text(theme::night::UI, t.ink).child("Add Skin"))
+            .child(shell::text(theme::MICRO, t.ink_soft)
+                .child("Choose a PNG"))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.choose_minecraft_skin(cx);
+            })));
         cards = cards.child(self.skin_card("current".into(), "Current skin".into(), None, cx));
-        for path in saved_skins() {
-            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Custom skin").to_owned();
+        for path in &saved {
+            let name = path.file_stem().and_then(|s| s.to_str())
+                .unwrap_or("Custom skin").to_owned();
             let id = path.to_string_lossy().into_owned();
-            cards = cards.child(self.skin_card(id, name, skin_face(&path), cx));
+            cards = cards.child(self.skin_card(id, name, skin_face(path), cx));
         }
 
-        let mut right = div().flex().flex_col().gap(px(18.)).flex_1().min_w_0()
-            .child(div().flex().flex_col().gap(px(16.)).p(px(22.))
-                .rounded(px(22.)).bg(t.plate_soft)
-                .child(shell::text(theme::night::TITLE, t.ink).child("Saved Skins"))
+        let mut right = div().flex().flex_col().gap(px(16.)).flex_1().min_w(px(370.))
+            .child(skin_surface().flex().flex_col().gap(px(18.)).p(px(21.))
+                .child(div().flex().items_center().justify_between()
+                    .child(div().flex().flex_col().gap(px(5.))
+                        .child(shell::text(theme::night::TITLE, t.ink)
+                            .child("Saved Skins"))
+                        .child(shell::text(theme::MICRO, t.ink_soft)
+                            .child("Select or hover over a skin to edit it.")))
+                    .child(div().px(px(11.)).py(px(6.)).rounded_full()
+                        .bg(gpui::rgb(0x50334c))
+                        .child(shell::text(theme::MICRO, t.ink)
+                            .child(format!("{} saved", saved.len())))))
                 .child(cards));
+
         if let Some(ref editing) = self.skin_editing {
-            let name = if editing == "current" { "Current skin".to_owned() }
-                else { Path::new(editing).file_stem().and_then(|s| s.to_str())
-                    .unwrap_or("Custom skin").to_owned() };
-            let wide = button("skin-wide", "Wide (Steve)", if self.skin_slim { Kind::Ghost } else { Kind::Primary }, &t)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| { this.skin_slim = false; cx.notify(); }));
-            let slim = button("skin-slim", "Slim (Alex)", if self.skin_slim { Kind::Primary } else { Kind::Ghost }, &t)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| { this.skin_slim = true; cx.notify(); }));
-            let apply = button("skin-apply", if self.skin_uploading { "Applying…" } else { "Apply skin" },
-                Kind::Primary, &t);
-            let apply = if self.skin_uploading { disabled(apply) } else {
-                apply.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.skin_apply(cx)))
+            let name = if editing == "current" {
+                "Current skin".to_owned()
+            } else {
+                Path::new(editing).file_stem().and_then(|s| s.to_str())
+                    .unwrap_or("Custom skin").to_owned()
             };
-            right = right.child(div().flex().flex_col().items_start().gap(px(14.)).p(px(22.))
-                .rounded(px(22.)).bg(t.plate_soft)
-                .child(shell::text(theme::night::TITLE, t.ink).child(format!("Edit · {name}")))
-                .child(shell::text(theme::night::UI, t.ink_soft)
-                    .child("Choose arm width, then apply it to your Minecraft Java account."))
-                .child(div().flex().flex_wrap().gap(px(10.)).child(wide).child(slim))
-                .child(apply));
+            let wide = button("skin-wide", "Wide (Steve)",
+                if self.skin_slim { Kind::Ghost } else { Kind::Primary }, &t)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.skin_slim = false; cx.notify();
+                }));
+            let slim = button("skin-slim", "Slim (Alex)",
+                if self.skin_slim { Kind::Primary } else { Kind::Ghost }, &t)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.skin_slim = true; cx.notify();
+                }));
+            let apply = button("skin-apply",
+                if self.skin_uploading { "Applying…" } else if selected.is_none() {
+                    "Sign in to apply"
+                } else { "✓ Apply Skin" },
+                Kind::Primary, &t);
+            let apply = if self.skin_uploading || selected.is_none() {
+                disabled(apply)
+            } else {
+                apply.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.skin_apply(cx);
+                }))
+            };
+            right = right.child(skin_surface()
+                .flex().flex_col().gap(px(13.)).p(px(21.))
+                .child(div().flex().items_center().gap(px(10.))
+                    .child(shell::text(theme::night::TITLE, t.ink)
+                        .child(format!("Edit Skin · {name}"))))
+                .child(shell::text(theme::MICRO, t.ink_soft)
+                    .child("Preview both arm styles, then apply to your Java profile."))
+                .child(div().flex().flex_wrap().items_center().gap(px(10.))
+                    .child(shell::text(theme::night::UI, t.ink).child("Arm Style"))
+                    .child(wide).child(slim).child(apply)));
         }
-        let mut capes = div().flex().flex_wrap().gap(px(10.));
-        let none_equipped = !self.skin_capes.iter().any(|cape| cape.active);
-        let none = button("cape-none", if none_equipped { "✓ No cape" } else { "No cape" },
+
+        let mut capes = div().flex().flex_wrap().gap(px(12.));
+        let none_equipped = !self.skin_capes.iter().any(|c| c.active);
+        let no_cape = button("cape-none",
+            if none_equipped { "✓ No cape" } else { "No cape" },
             if none_equipped { Kind::Primary } else { Kind::Secondary }, &t);
-        capes = capes.child(if self.skin_cape_busy { disabled(none) } else {
-            none.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.skin_equip_cape(None, cx)))
+        capes = capes.child(if self.skin_cape_busy || selected.is_none() {
+            disabled(no_cape)
+        } else {
+            no_cape.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.skin_equip_cape(None, cx);
+            }))
         });
         for cape in self.skin_capes.clone() {
             let id = cape.id.clone();
-            let label = if cape.active { format!("✓ {}", cape.name) } else { cape.name };
-            let capebtn = button(SharedString::from(format!("cape-{}", cape.id)), label,
-                if cape.active { Kind::Primary } else { Kind::Secondary }, &t);
-            capes = capes.child(if self.skin_cape_busy { disabled(capebtn) } else {
-                capebtn.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            let label = if cape.active {
+                format!("✓ {}", cape.name)
+            } else { cape.name };
+            let btn = button(SharedString::from(format!("cape-{}", cape.id)),
+                label, if cape.active { Kind::Primary } else { Kind::Secondary }, &t);
+            capes = capes.child(if self.skin_cape_busy {
+                disabled(btn)
+            } else {
+                btn.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.skin_equip_cape(Some(id.clone()), cx);
                 }))
             });
         }
-        let refresh = button("cape-refresh", if self.skin_cape_busy { "Loading…" } else { "Refresh capes" },
+        let refresh = button("cape-refresh",
+            if self.skin_cape_busy { "Syncing…" } else { "↻ Sync Capes" },
             Kind::Ghost, &t);
-        let refresh = if self.skin_cape_busy { disabled(refresh) } else {
-            refresh.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.skin_refresh_capes(cx)))
+        let refresh = if self.skin_cape_busy || selected.is_none() {
+            disabled(refresh)
+        } else {
+            refresh.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.skin_refresh_capes(cx);
+            }))
         };
-        right = right.child(div().flex().flex_col().items_start().gap(px(14.)).p(px(22.))
-            .rounded(px(22.)).bg(t.plate_soft)
-            .child(shell::text(theme::night::TITLE, t.ink).child("Your Minecraft Capes"))
-            .child(shell::text(theme::night::UI, t.ink_soft)
-                .child("Only capes owned by your signed-in Minecraft account can be equipped."))
-            .child(if self.skin_cape_busy {
-                shell::text(theme::night::UI, t.ink_soft).child("Checking your capes…").into_any_element()
+        right = right.child(skin_surface().flex().flex_col().gap(px(13.)).p(px(21.))
+            .child(div().flex().items_center().justify_between()
+                .child(shell::text(theme::night::TITLE, t.ink)
+                    .child("Your Minecraft Capes"))
+                .child(shell::text(theme::MICRO, t.ink_soft)
+                    .child(format!("{} owned", self.skin_capes.len()))))
+            .child(shell::text(theme::MICRO, t.ink_soft).child(
+                "Official capes owned by your Microsoft account; no unofficial capes."
+            ))
+            .child(if selected.is_none() {
+                shell::text(theme::night::UI, t.ink_soft)
+                    .child("Sign in to sync and equip your capes.")
+                    .into_any_element()
+            } else if self.skin_cape_busy {
+                shell::text(theme::night::UI, t.ink_soft)
+                    .child("Checking your Minecraft capes…")
+                    .into_any_element()
             } else if self.skin_capes.is_empty() {
-                shell::text(theme::night::UI, t.ink_soft).child("No account capes found.").into_any_element()
+                shell::text(theme::night::UI, t.ink_soft)
+                    .child("No official capes found for this account.")
+                    .into_any_element()
             } else { div().into_any_element() })
-            .child(capes).child(refresh));
+            .child(capes)
+            .child(refresh));
         if let Some(status) = self.skin_status.clone() {
-            right = right.child(div().p(px(14.)).rounded(px(12.)).bg(t.plate_soft)
+            right = right.child(skin_surface().p(px(13.))
                 .child(shell::text(theme::night::UI, t.ink_soft).child(status)));
         }
-        div().flex().flex_col().gap(px(20.)).pt(px(20.))
-            .child(page_header("Skins", "Manage your saved Minecraft skins and official capes.", &t))
-            .child(div().flex().flex_wrap().gap(px(20.)).items_start().child(left).child(right))
+
+        div().flex().flex_col().gap(px(18.)).pt(px(13.))
+            .child(header)
+            .child(div().flex().flex_wrap().items_start()
+                .gap(px(20.)).child(left).child(right))
     }
 }
