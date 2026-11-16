@@ -152,6 +152,7 @@ pub(super) enum Event {
     Pvp(Option<bool>),
     UpdateCheck(Result<Value, Problem>),
     Failed(String),
+    JavaVersions(Result<Vec<String>, String>),
 }
 
 /// The Create dialog's answers.
@@ -165,6 +166,7 @@ pub(super) struct Create {
     mode: &'static str,
     software: &'static str,
     ram_gb: u8,
+    versions: Vec<String>,
     difficulty: &'static str,
     max_players: u32,
     friends_only: bool,
@@ -763,6 +765,17 @@ impl Launcher {
                 s.problem = Some(Problem::plain(e));
                 true
             }
+            Event::JavaVersions(result) => {
+                if let Some(create) = &mut s.create {
+                    match result {
+                        Ok(versions) => create.versions = versions,
+                        Err(e) => s.problem = Some(Problem::plain(format!("Couldn't load Minecraft versions: {e}"))),
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -1024,6 +1037,7 @@ impl Launcher {
             mode: "survival",
             software: "vanilla",
             ram_gb: 4,
+            versions: Vec::new(),
             difficulty: "normal",
             max_players: 10,
             friends_only: true,
@@ -1032,6 +1046,10 @@ impl Launcher {
             eula_missing: false,
             friends,
             details,
+        });
+        let tx = self.servers.tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(Event::JavaVersions(servers::java::versions()));
         });
     }
 
