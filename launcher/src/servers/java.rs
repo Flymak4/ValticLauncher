@@ -259,6 +259,46 @@ fn properties(spec: &NewServer, port: u16) -> String {
         spec.friends_only
     )
 }
+/// Resolve real Minecraft accounts before enabling the whitelist, so server
+/// owners aren't accidentally locked out of the world they have just created.
+fn provision_players(dir: &Path, spec: &NewServer) -> Result<(), String> {
+    if !spec.friends_only || spec.players.is_empty() {
+        return Ok(());
+    }
+    if !spec.check_accounts {
+        return Err("Turn on Minecraft account verification when creating a friends-only Java server.".into());
+    }
+    let mut allowed = Vec::new();
+    for name in &spec.players {
+        if !(3..=16).contains(&name.len())
+            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(format!("Invalid Minecraft account name: {name}"));
+        }
+        let data = fetch_json(&format!(
+            "https://api.minecraftservices.com/minecraft/profile/lookup/name/{name}"
+        ))?;
+        let uuid = data["id"].as_str().ok_or_else(|| format!(
+            "Minecraft account {name} could not be verified for the whitelist."
+        ))?;
+        if uuid.len() != 32 || !uuid.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("Invalid UUID returned for {name}."));
+        }
+        let formatted = format!("{}-{}-{}-{}-{}",
+            &uuid[0..8], &uuid[8..12], &uuid[12..16], &uuid[16..20], &uuid[20..32]);
+        allowed.push(json!({ "uuid": formatted, "name": data["name"].as_str().unwrap_or(name) }));
+    }
+    fs::write(dir.join("whitelist.json"),
+        serde_json::to_vec_pretty(&allowed).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    if let Some(first) = allowed.first() {
+        fs::write(dir.join("ops.json"),
+            serde_json::to_vec_pretty(&vec![json!({
+                "uuid": first["uuid"], "name": first["name"], "level": 4, "bypassesPlayerLimit": false
+            })]).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, log: &dyn Fn(String)) -> Result<Entry, Problem> {
     if !spec.eula {
         return Err(Problem::plain("You must accept the Minecraft EULA to create a server."));
@@ -276,6 +316,7 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, l
         let (launch, loader_version) = install(software, version, &dir, log)?;
         fs::write(dir.join("eula.txt"), "eula=true\n").map_err(|e| e.to_string())?;
         fs::write(dir.join("server.properties"), properties(spec, port)).map_err(|e| e.to_string())?;
+        provision_players(&dir, spec)?;
         if let World::Copy(world) = &spec.world {
             log("Copying your existing world".into());
             super::copy_world(world, &dir.join("world")).map_err(|e| e.to_string())?;
