@@ -115,6 +115,8 @@ impl Launcher {
                 .map_or(String::new(), |(_, l)| tr(l).to_string())
         };
         let rules = [
+            label(&SOFTWARES, c.software),
+            self.servers.value(Field::JavaVersion).to_string(),
             label(&MODES, c.mode),
             label(&DIFFICULTIES, c.difficulty),
             trf(
@@ -209,7 +211,7 @@ impl Launcher {
             .child(
                 ui::text(13., FontWeight::NORMAL, ink::FAINT)
                     .line_height(px(20.))
-                    .child(tr("Everything has a default: tick the EULA and Create makes a friends-only survival world. You can change all of it later, from the server's Settings tab.")),
+                    .child(tr("Choose the software and Minecraft version. Java must be installed. Valtic will download the official server files and install supported mod loaders.")),
             )
     }
 
@@ -222,6 +224,9 @@ impl Launcher {
         let (new_world, copy, worlds) = (c.new_world, c.copy.clone(), c.worlds.clone());
         let details = c.details.clone();
         let (mode, difficulty, max) = (c.mode, c.difficulty, c.max_players);
+        let (software, ram_gb) = (c.software, c.ram_gb);
+        // Copy the version choices before creating widgets that mutably borrow self.
+        let release_options = c.versions.iter().take(7).cloned().collect::<Vec<_>>();
         let (friends_only, check, friends) = (c.friends_only, c.check_accounts, c.friends.clone());
         let creating = self.servers.creating;
         // The mockup's `clamp(1.6rem, 2.4vw, 2.1rem)`.
@@ -253,7 +258,7 @@ impl Launcher {
                         ui::text(14., FontWeight::NORMAL, ink::NOTE)
                             .mt(px(6.))
                             .child(tr(
-                                "The same program a VPS runs, started from here with buttons.",
+                                "Create a real Java Edition server. Valtic installs your selected software.",
                             )),
                     ),
             )
@@ -544,6 +549,60 @@ impl Launcher {
                     .on_click(set(cx, |c| c.check_accounts = !c.check_accounts)),
             );
 
+        // Pick the actual Java server distribution, not the Horizon game executable.
+        let loaders = section(
+            "Server software".into(),
+            None,
+            div().flex().gap(px(10.)).children(SOFTWARES.iter().map(|&(id, label)| {
+                choice(SharedString::from(format!("create-software-{id}")), software == id, &t)
+                    .flex_1()
+                    .p(px(12.))
+                    .child(choice_text(label, "Java Edition".to_string()))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if let Some(c) = &mut this.servers.create {
+                            c.software = id;
+                        }
+                        cx.notify();
+                    }))
+            })),
+        );
+        let chosen = self.servers.value(Field::JavaVersion).to_owned();
+        let version_tiles = div().flex().flex_wrap().gap(px(8.))
+            .children(release_options.into_iter().map(|v| {
+                let active = v == chosen;
+                choice(SharedString::from(format!("create-mc-{}", v)), active, &t)
+                    .px(px(12.)).py(px(8.))
+                    .child(ui::text(13., FontWeight::MEDIUM, ink::FULL).child(v.clone()))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.servers.text(Field::JavaVersion).set(v.clone());
+                        cx.notify();
+                    }))
+            }));
+        let version = section(
+            "Minecraft version".into(),
+            None,
+            div().flex().flex_col().gap(px(10.))
+                .child(self.field(Field::JavaVersion, "26.3", 400., cx).w_full())
+                .child(version_tiles),
+        );
+        let ram_controls = strip()
+            .items_center()
+            .child(
+                keyboard(div().id("create-ram-less").size(px(40.)).flex().items_center().justify_center()
+                    .rounded(px(radius::CONTROL)).cursor_pointer()
+                    .child(ui::icon("minus-sign", 17., white(ink::FULL))), &t)
+                    .when(ram_gb > 1, |b| b.on_click(set(cx, |c| c.ram_gb = c.ram_gb.saturating_sub(1).max(1))))
+            )
+            .child(ui::text(16., FontWeight::SEMIBOLD, ink::FULL)
+                .child(format!("{ram_gb} GB")))
+            .child(
+                keyboard(div().id("create-ram-more").size(px(40.)).flex().items_center().justify_center()
+                    .rounded(px(radius::CONTROL)).cursor_pointer()
+                    .child(ui::icon("plus-sign", 17., white(ink::FULL))), &t)
+                    .when(ram_gb < 16, |b| b.on_click(set(cx, |c| c.ram_gb = c.ram_gb.saturating_add(1).min(16))))
+            );
+        let memory = section("Maximum RAM".into(), None, ram_controls);
+
         let body = div()
             .id("create-body")
             .flex()
@@ -559,6 +618,9 @@ impl Launcher {
                 None,
                 self.field(Field::Name, "My server", 400., cx).w_full(),
             ))
+            .child(loaders)
+            .child(version)
+            .child(memory)
             .child(world)
             .child(section(tr("Game mode").into(), None, modes))
             .child(numbers)

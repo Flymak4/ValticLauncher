@@ -45,6 +45,7 @@ pub(super) enum Field {
     InstanceGroup,
     /// Its search in Mojang's versions (`new_instance.rs`).
     InstanceVersion,
+    JavaVersion,
     /// Home's Mods tab's filter (`instance_mods.rs`).
     InstanceModsFilter,
     /// Home's Multiplayer section's (`multiplayer_page.rs`).
@@ -67,7 +68,7 @@ pub(super) enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 24] = [
+    const ALL: [Field; 25] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -80,6 +81,7 @@ impl Field {
         Field::InstanceName,
         Field::InstanceGroup,
         Field::InstanceVersion,
+        Field::JavaVersion,
         Field::InstanceModsFilter,
         Field::ServerName,
         Field::ServerAddress,
@@ -116,6 +118,8 @@ const MODES: [(&str, &str); 3] = [
     ("adventure", "Adventure"),
 ];
 
+const SOFTWARES: [(&str, &str); 4] = [("vanilla", "Vanilla"), ("fabric", "Fabric"), ("forge", "Forge"), ("neoforge", "NeoForge")];
+
 const DIFFICULTIES: [(&str, &str); 4] = [
     ("peaceful", "Peaceful"),
     ("easy", "Easy"),
@@ -148,6 +152,7 @@ pub(super) enum Event {
     Pvp(Option<bool>),
     UpdateCheck(Result<Value, Problem>),
     Failed(String),
+    JavaVersions(Result<Vec<String>, String>),
 }
 
 /// The Create dialog's answers.
@@ -159,6 +164,9 @@ pub(super) struct Create {
     /// once when the dialog opens.
     details: HashMap<PathBuf, (String, String)>,
     mode: &'static str,
+    software: &'static str,
+    ram_gb: u8,
+    versions: Vec<String>,
     difficulty: &'static str,
     max_players: u32,
     friends_only: bool,
@@ -386,7 +394,9 @@ pub(super) fn stop_on_quit() {
         if servers::service_installed(&dir) {
             continue;
         }
-        if let Some(api) = servers::Api::open(&dir) {
+        if servers::java::is_java(&dir) {
+            let _ = servers::java::stop(&dir);
+        } else if let Some(api) = servers::Api::open(&dir) {
             let _ = api.call("POST", "/api/v1/stop", None);
         }
     }
@@ -396,7 +406,14 @@ pub(super) fn stop_on_quit() {
 /// new window finds it running, so an update doesn't end anyone's game. It stays up when that new
 /// window closes too, until it is stopped on the Servers page.
 pub(super) fn keep_running_through_update() {
-    STARTED_HERE.lock().unwrap().clear();
+    // The native supervisor can be adopted after an update. Java stdin
+    // pipes cannot, so gracefully stop them rather than leaving
+    // an unmanageable background process that still owns its port.
+    let mut started = STARTED_HERE.lock().unwrap();
+    for dir in started.iter().filter(|d| servers::java::is_java(d)) {
+        let _ = servers::java::stop(dir);
+    }
+    started.clear();
 }
 
 /// The player's own name, to let them in on a friends-only server: the Microsoft account that plays.
@@ -571,12 +588,14 @@ impl Launcher {
                     0
                 };
                 std::thread::spawn(move || {
-                    let api = servers::Api::open(&dir);
-                    let status = api
-                        .as_ref()
-                        .and_then(|a| a.status())
-                        .unwrap_or_else(Status::stopped);
-                    let logs = api.and_then(|a| a.logs(since));
+                    let (status, logs) = if servers::java::is_java(&dir) {
+                        (servers::java::status(&dir), servers::java::logs(&dir, since))
+                    } else {
+                        let api = servers::Api::open(&dir);
+                        let status = api.as_ref().and_then(|a| a.status()).unwrap_or_else(Status::stopped);
+                        let logs = api.and_then(|a| a.logs(since));
+                        (status, logs)
+                    };
                     let _ = tx.send(Event::Polled {
                         dir,
                         status: Box::new(status),
@@ -630,7 +649,7 @@ impl Launcher {
                     }
                     s.log_next = next;
                 }
-                let read_pvp = status.phase == "running" && s.pvp.is_none();
+                let read_pvp = !servers::java::is_java(&dir) && status.phase == "running" && s.pvp.is_none();
                 if s.statuses.get(&dir) != Some(&status) {
                     s.statuses.insert(dir, *status);
                     changed = true;
@@ -678,11 +697,21 @@ impl Launcher {
                         s.list = servers::list();
                         s.modes.clear();
                         s.modes.clear();
+                        let is_java = servers::java::is_java(&entry.dir);
                         self.open_server(entry.dir.clone());
-                        self.servers.note = Some(format!(
-                            "{} is ready. Press Start, then give your friends the address below.",
-                            entry.name
-                        ));
+                        self.servers.note = Some(if is_java {
+                            format!("{} is installed. Press Start. Playit.gg will open for your one-time account setup.", entry.name)
+                        } else {
+                            format!("{} is ready. Press Start, then give your friends the address below.", entry.name)
+                        });
+                        if is_java {
+                            let tx = self.servers.tx.clone();
+                            std::thread::spawn(move || {
+                                if let Err(e) = servers::java::open_playit() {
+                                    let _ = tx.send(Event::Failed(format!("Playit.gg setup: {e}")));
+                                }
+                            });
+                        }
                     }
                     Err(p) => s.problem = Some(p),
                 }
@@ -753,6 +782,17 @@ impl Launcher {
                 s.problem = Some(Problem::plain(e));
                 true
             }
+            Event::JavaVersions(result) => {
+                if let Some(create) = &mut s.create {
+                    match result {
+                        Ok(versions) => create.versions = versions,
+                        Err(e) => s.problem = Some(Problem::plain(format!("Couldn't load Minecraft versions: {e}"))),
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -763,7 +803,9 @@ impl Launcher {
         };
         let tx = self.servers.tx.clone();
         std::thread::spawn(move || {
-            let on = servers::Api::open(&dir)
+            let on = if servers::java::is_java(&dir) {
+                None
+            } else { servers::Api::open(&dir)
                 .and_then(|a| a.command("gamerule pvp").ok())
                 .and_then(|out| {
                     let text = out.join(" ");
@@ -775,7 +817,8 @@ impl Launcher {
                     } else {
                         None
                     }
-                });
+                })
+            };
             let _ = tx.send(Event::Pvp(on));
         });
     }
@@ -829,9 +872,13 @@ impl Launcher {
         self.servers.log.push_back(format!("> {line}"));
         self.servers.console_scroll.handle.scroll_to_bottom();
         std::thread::spawn(move || {
-            let result = servers::Api::open(&dir)
-                .ok_or_else(|| "The server isn't running.".to_string())
-                .and_then(|a| a.command(&line));
+            let result = if servers::java::is_java(&dir) {
+                servers::java::command(&dir, &line).map(|_| Vec::new())
+            } else {
+                servers::Api::open(&dir)
+                    .ok_or_else(|| "The server isn't running.".to_string())
+                    .and_then(|a| a.command(&line))
+            };
             if let Err(e) = result {
                 let _ = tx.send(Event::Failed(e));
             }
@@ -844,6 +891,10 @@ impl Launcher {
         };
         STARTED_HERE.lock().unwrap().push(dir.clone());
         self.servers.restart_needed.clear();
+        if servers::java::is_java(&dir) {
+            self.server_job("Starting Java server", move |_log| servers::java::start(&dir));
+            return;
+        }
         self.server_job("Starting", move |log| {
             if let Some(api) = servers::Api::open(&dir) {
                 if let Ok(status) = api.call("GET", "/api/v1/status", None) {
@@ -863,6 +914,10 @@ impl Launcher {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        if servers::java::is_java(&dir) {
+            self.server_job("Stopping Java server", move |_log| servers::java::stop(&dir));
+            return;
+        }
         self.server_job("Stopping", move |log| {
             // The running server's API first; when it can't be reached or refuses, the CLI,
             // whose error is the job's.
@@ -879,6 +934,19 @@ impl Launcher {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        if servers::java::is_java(&dir) {
+            self.server_job("Restarting Java server", move |_log| {
+                servers::java::stop(&dir)?;
+                for _ in 0..100 {
+                    if !servers::java::is_running(&dir) {
+                        return servers::java::start(&dir);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(Problem::plain("The server is still stopping. Start it once it has exited."))
+            });
+            return;
+        }
         self.server_job("Restarting", move |log| {
             // The running server's API first; when it can't be reached or refuses, the CLI,
             // whose error is the job's.
@@ -957,6 +1025,7 @@ impl Launcher {
             .set(if glass { String::new() } else { name });
         self.servers.selected = (!glass).then_some(Field::Name);
         self.servers.text(Field::Seed).set(String::new());
+        self.servers.text(Field::JavaVersion).set("26.3".to_string());
         self.servers
             .text(Field::Players)
             .set(if glass { String::new() } else { own.clone() });
@@ -983,6 +1052,9 @@ impl Launcher {
             copy: worlds.first().map(|w| w.1.clone()),
             worlds,
             mode: "survival",
+            software: "vanilla",
+            ram_gb: 4,
+            versions: Vec::new(),
             difficulty: "normal",
             max_players: 10,
             friends_only: true,
@@ -991,6 +1063,10 @@ impl Launcher {
             eula_missing: false,
             friends,
             details,
+        });
+        let tx = self.servers.tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(Event::JavaVersions(servers::java::versions()));
         });
     }
 
@@ -1038,7 +1114,9 @@ impl Launcher {
             players,
             eula: c.eula,
         };
-        let tag = self.selected().cloned();
+        let software = servers::java::Software::parse(c.software).unwrap_or(servers::java::Software::Vanilla);
+        let minecraft_version = self.servers.value(Field::JavaVersion).trim().to_string();
+        let ram_gb = c.ram_gb;
         let tx = self.servers.tx.clone();
         self.servers.creating = true;
         self.servers.problem = None;
@@ -1048,7 +1126,7 @@ impl Launcher {
             let log = move |l: String| {
                 let _ = lines.send(Event::Line(l));
             };
-            let _ = tx.send(Event::Created(servers::create(&spec, tag.as_deref(), &log)));
+            let _ = tx.send(Event::Created(servers::java::create(&spec, software, &minecraft_version, ram_gb, &log)));
         });
     }
 
@@ -1276,6 +1354,7 @@ impl Launcher {
             Field::InstanceName
             | Field::InstanceGroup
             | Field::InstanceVersion
+            | Field::JavaVersion
             | Field::InstanceModsFilter
             | Field::ConsoleSearch
             | Field::DeleteServer

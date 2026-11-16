@@ -31,7 +31,7 @@ impl Launcher {
     pub(super) fn glass_servers_page(&mut self, cx: &mut Context<Self>) -> Div {
         let head = glass_ui::page_head(
             tr("Servers"),
-            tr("Host a world for your friends with buttons and no commands. The same program runs on a VPS."),
+            tr("Create a Vanilla, Fabric, Forge or NeoForge server, manage it here, and invite friends with Playit.gg."),
         );
         // The mockup always shows a server: the open one, else the first.
         if self.servers.open.is_none() {
@@ -68,7 +68,9 @@ impl Launcher {
         );
         // Sculk's banner right under the server, where it is seen without scrolling past the
         // server's tabs (as before the glass look, under the page's actions).
-        page = page.children(self.glass_sculk(cx));
+        if !open.as_ref().is_some_and(|dir| servers::java::is_java(dir)) {
+            page = page.children(self.glass_sculk(cx));
+        }
         if let Some(dir) = &open {
             page = page.child(self.glass_server_tabs(dir, &status, cx));
         }
@@ -79,6 +81,7 @@ impl Launcher {
     fn glass_server(&mut self, dir: &Path, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let status = self.servers.status();
+        let java_host = servers::java::is_java(dir);
         let running = status.running();
         let idle = self.servers.busy.is_none();
         let name = self
@@ -93,13 +96,17 @@ impl Launcher {
             state = format!("{state} · {}", trf("up {time}", &[("time", &uptime(up))]));
         }
         let numbers = if running {
-            let mut parts = vec![trf(
-                "{online} of {max} players",
-                &[
-                    ("online", &status.players.len().to_string()),
-                    ("max", &status.max_players.unwrap_or(0).to_string()),
-                ],
-            )];
+            let mut parts = if java_host {
+                status.release.clone().into_iter().collect::<Vec<_>>()
+            } else {
+                vec![trf(
+                    "{online} of {max} players",
+                    &[
+                        ("online", &status.players.len().to_string()),
+                        ("max", &status.max_players.unwrap_or(0).to_string()),
+                    ],
+                )]
+            };
             if let Some(tps) = status.tps {
                 parts.push(trf("{tps} TPS", &[("tps", &format!("{tps:.1}"))]));
             }
@@ -110,6 +117,14 @@ impl Launcher {
                 parts.push(format!("{:.2} GB", ram as f64 / 1e9));
             }
             parts.join(" · ")
+        } else if java_host {
+            let mode = self.servers.shown("world", "game_mode");
+            match servers::java::metadata(dir) {
+                Ok(m) => format!("{} {} · {} GB RAM · {} · up to {} players",
+                    m.software.label(), m.minecraft_version, m.ram_gb, mode,
+                    status.max_players.unwrap_or(10)),
+                Err(_) => "Minecraft Java server".into(),
+            }
         } else {
             let mode = self.servers.shown("world", "game_mode");
             let mode = MODES
@@ -152,6 +167,10 @@ impl Launcher {
         corner = corner.child(if running {
             let d = dir.to_path_buf();
             panel.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if servers::java::is_java(&d) {
+                    crate::glass_toast::open(cx, &d);
+                    return;
+                }
                 match servers::Api::open(&d).map(|a| a.panel_link()) {
                     Some(Ok(url)) => cx.open_url(&url),
                     Some(Err(e)) => this.servers.problem = Some(Problem::plain(e)),
@@ -175,7 +194,7 @@ impl Launcher {
             buttons = buttons.child(if idle {
                 restart.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.servers.restart_needed.clear();
-                    this.server_command("Restarting", vec!["restart".into()]);
+                    this.restart_server();
                     cx.notify();
                 }))
             } else {
@@ -184,7 +203,7 @@ impl Launcher {
             let stop = ui::solid("server-start", tr("Stop"), 44., 14., &t).px(px(24.));
             buttons = buttons.child(if idle {
                 stop.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.server_command("Stopping", vec!["stop".into()]);
+                    this.stop_server();
                     cx.notify();
                 }))
             } else {
@@ -385,7 +404,7 @@ impl Launcher {
                 .child(if idle {
                     restart.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.servers.restart_needed.clear();
-                        this.server_command("Restarting", vec!["restart".into()]);
+                        this.restart_server();
                         cx.notify();
                     }))
                 } else {
@@ -682,7 +701,11 @@ impl Launcher {
                 ))
                 .mt(px(4.)),
             );
-        let internet = self.glass_internet(port, cx);
+        let internet = if self.servers.open.as_ref().is_some_and(|d| servers::java::is_java(d)) {
+            self.glass_playit(port, cx)
+        } else {
+            self.glass_internet(port, cx)
+        };
         let mut card = glass::plate(radius::PANEL)
             .flex()
             .flex_col()
@@ -730,6 +753,31 @@ impl Launcher {
             );
         }
         card
+    }
+
+    /// Playit.gg provides a public TCP tunnel without opening router ports.
+    /// Its own app handles account authorisation; never invent a hostname.
+    fn glass_playit(&mut self, port: u16, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        div()
+            .flex().flex_col().gap(px(10.))
+            .child(ui::card_heading("Over the internet · Playit.gg"))
+            .child(ui::card_note(format!(
+                "Connect a Minecraft Java tunnel to 127.0.0.1:{port} in Playit.gg. A one-time account setup is required."
+            )))
+            .child(div().flex().flex_wrap().gap(px(8.))
+                .child(ui::quiet("playit-start", "Launch Playit", 36., &t)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        let tx = this.servers.tx.clone();
+                        std::thread::spawn(move || {
+                            if let Err(e) = servers::java::open_playit() {
+                                let _ = tx.send(Event::Failed(e));
+                            }
+                        });
+                        cx.notify();
+                    })))
+                .child(ui::quiet("playit-config", "Manage tunnels", 36., &t)
+                    .on_click(|_, _, cx| cx.open_url("https://playit.gg/account/tunnels"))))
     }
 
     /// The server's Players, Settings and Backups (not in the mockup), on a glass under it.
