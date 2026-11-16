@@ -406,7 +406,14 @@ pub(super) fn stop_on_quit() {
 /// new window finds it running, so an update doesn't end anyone's game. It stays up when that new
 /// window closes too, until it is stopped on the Servers page.
 pub(super) fn keep_running_through_update() {
-    STARTED_HERE.lock().unwrap().clear();
+    // The native supervisor can be adopted after an update. Java stdin
+    // pipes cannot, so gracefully stop them rather than leaving
+    // an unmanageable background process that still owns its port.
+    let mut started = STARTED_HERE.lock().unwrap();
+    for dir in started.iter().filter(|d| servers::java::is_java(d)) {
+        let _ = servers::java::stop(dir);
+    }
+    started.clear();
 }
 
 /// The player's own name, to let them in on a friends-only server: the Microsoft account that plays.
@@ -642,7 +649,7 @@ impl Launcher {
                     }
                     s.log_next = next;
                 }
-                let read_pvp = status.phase == "running" && s.pvp.is_none();
+                let read_pvp = !servers::java::is_java(&dir) && status.phase == "running" && s.pvp.is_none();
                 if s.statuses.get(&dir) != Some(&status) {
                     s.statuses.insert(dir, *status);
                     changed = true;
