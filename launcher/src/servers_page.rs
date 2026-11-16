@@ -787,7 +787,8 @@ impl Launcher {
                     } else {
                         None
                     }
-                });
+                })
+            };
             let _ = tx.send(Event::Pvp(on));
         });
     }
