@@ -67,7 +67,7 @@ jobs:
           # those are Valtic-branded or privileged and must be reviewed separately.
           ENGINE_PATHS=(
             Cargo.toml Cargo.lock
-            crates mods third_party tools xtask tests
+            crates mods third_party tools xtask tests docs/modding/examples
             .cargo native-hooks.json research-lock.json
             ':(exclude)tools/pad_glyphs/gen.py'
             # These are Valtic-owned title/menu and guest permission rules.
