@@ -31,7 +31,7 @@ impl Launcher {
     pub(super) fn glass_servers_page(&mut self, cx: &mut Context<Self>) -> Div {
         let head = glass_ui::page_head(
             tr("Servers"),
-            tr("Host a world for your friends with buttons and no commands. The same program runs on a VPS."),
+            tr("Create a Vanilla, Fabric, Forge or NeoForge server, manage it here, and invite friends with Playit.gg."),
         );
         // The mockup always shows a server: the open one, else the first.
         if self.servers.open.is_none() {
@@ -81,6 +81,7 @@ impl Launcher {
     fn glass_server(&mut self, dir: &Path, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let status = self.servers.status();
+        let java_host = servers::java::is_java(dir);
         let running = status.running();
         let idle = self.servers.busy.is_none();
         let name = self
@@ -95,13 +96,17 @@ impl Launcher {
             state = format!("{state} · {}", trf("up {time}", &[("time", &uptime(up))]));
         }
         let numbers = if running {
-            let mut parts = vec![trf(
-                "{online} of {max} players",
-                &[
-                    ("online", &status.players.len().to_string()),
-                    ("max", &status.max_players.unwrap_or(0).to_string()),
-                ],
-            )];
+            let mut parts = if java_host {
+                status.release.clone().into_iter().collect::<Vec<_>>()
+            } else {
+                vec![trf(
+                    "{online} of {max} players",
+                    &[
+                        ("online", &status.players.len().to_string()),
+                        ("max", &status.max_players.unwrap_or(0).to_string()),
+                    ],
+                )]
+            };
             if let Some(tps) = status.tps {
                 parts.push(trf("{tps} TPS", &[("tps", &format!("{tps:.1}"))]));
             }
@@ -112,6 +117,14 @@ impl Launcher {
                 parts.push(format!("{:.2} GB", ram as f64 / 1e9));
             }
             parts.join(" · ")
+        } else if java_host {
+            let mode = self.servers.shown("world", "game_mode");
+            match servers::java::metadata(dir) {
+                Ok(m) => format!("{} {} · {} GB RAM · {} · up to {} players",
+                    m.software.label(), m.minecraft_version, m.ram_gb, mode,
+                    status.max_players.unwrap_or(10)),
+                Err(_) => "Minecraft Java server".into(),
+            }
         } else {
             let mode = self.servers.shown("world", "game_mode");
             let mode = MODES
