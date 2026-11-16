@@ -366,6 +366,24 @@ pub fn start(dir: &Path) -> Result<String, Problem> {
     active.insert(dir.to_owned(), Running { child, started: Instant::now() });
     Ok(format!("Starting {} {} on port {}", meta.software.label(), meta.minecraft_version, meta.port))
 }
+/// Move only an inactive, registered Java server folder to the Recycle Bin.
+pub fn trash_stopped(
+    dir: &Path,
+    trash: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut active = RUNNING.lock().map_err(|_| "Server state is locked.")?;
+    if active.get_mut(dir).is_some_and(|p| p.child.try_wait().ok() == Some(None)) {
+        return Err("Stop this Java server before deleting it.".into());
+    }
+    if dir.symlink_metadata().map_err(|e| e.to_string())?.file_type().is_symlink()
+        || !dir.join(META).is_file()
+    {
+        return Err("Not a valid Java server folder.".into());
+    }
+    trash(dir)?;
+    active.remove(dir);
+    Ok(())
+}
 pub fn is_running(dir: &Path) -> bool {
     let Ok(mut active) = RUNNING.lock() else { return false; };
     active.get_mut(dir).is_some_and(|s| s.child.try_wait().ok() == Some(None))
