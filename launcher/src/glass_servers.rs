@@ -755,10 +755,12 @@ impl Launcher {
             .child(div().flex().flex_wrap().gap(px(8.))
                 .child(ui::quiet("playit-start", "Launch Playit", 36., &t)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        if let Err(e) = servers::java::open_playit() {
-                            this.servers.problem = Some(Problem::plain(e));
-                            cx.open_url("https://playit.gg/download");
-                        }
+                        let tx = this.servers.tx.clone();
+                        std::thread::spawn(move || {
+                            if let Err(e) = servers::java::open_playit() {
+                                let _ = tx.send(Event::Failed(e));
+                            }
+                        });
                         cx.notify();
                     })))
                 .child(ui::quiet("playit-config", "Manage tunnels", 36., &t)
