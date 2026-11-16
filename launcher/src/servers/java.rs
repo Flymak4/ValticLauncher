@@ -262,8 +262,11 @@ fn properties(spec: &NewServer, port: u16) -> String {
 /// Resolve real Minecraft accounts before enabling the whitelist, so server
 /// owners aren't accidentally locked out of the world they have just created.
 fn provision_players(dir: &Path, spec: &NewServer) -> Result<(), String> {
-    if !spec.friends_only || spec.players.is_empty() {
+    if !spec.friends_only {
         return Ok(());
+    }
+    if spec.players.is_empty() {
+        return Err("A friends-only server needs at least one verified Minecraft player. Add your account first, or choose Anyone with the address.".into());
     }
     if !spec.check_accounts {
         return Err("Turn on Minecraft account verification when creating a friends-only Java server.".into());
@@ -452,6 +455,9 @@ pub fn set_config(dir: &Path, changes: &[(&str, String)]) -> Result<super::Appli
         if mapped == "server-port" && value.parse::<u16>().ok().filter(|p| *p > 0).is_none() {
             return Err(Problem::plain("Port must be between 1 and 65535."));
         }
+        if mapped == "level-name" && (value.contains('/') || value.contains('\\') || value.contains("..")) {
+            return Err(Problem::plain("World folder names cannot contain directory separators or .."));
+        }
         if let Some(line) = lines.iter_mut().find(|l| l.starts_with(&format!("{mapped}="))) {
             *line = format!("{mapped}={value}");
         } else {
@@ -460,6 +466,15 @@ pub fn set_config(dir: &Path, changes: &[(&str, String)]) -> Result<super::Appli
     }
     let content = lines.join("\n") + "\n";
     fs::write(path, content).map_err(|e| Problem::plain(e.to_string()))?;
+    if let Some((_, port)) = changes.iter().find(|(key, _)| *key == "server.port") {
+        if let Ok(mut meta) = metadata(dir) {
+            if let Ok(number) = port.parse::<u16>() {
+                meta.port = number;
+                fs::write(dir.join(META), serde_json::to_vec_pretty(&meta).map_err(|e| Problem::plain(e.to_string()))?)
+                    .map_err(|e| Problem::plain(e.to_string()))?;
+            }
+        }
+    }
     Ok(super::Applied { applied: changes.iter().map(|(k, _)| (*k).into()).collect(), ..Default::default() })
 }
 /// Launch the official Playit client. On Windows, Valtic obtains the signed portable
