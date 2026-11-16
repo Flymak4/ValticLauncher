@@ -700,18 +700,10 @@ impl Launcher {
                         let is_java = servers::java::is_java(&entry.dir);
                         self.open_server(entry.dir.clone());
                         self.servers.note = Some(if is_java {
-                            format!("{} is installed. Press Start. Playit.gg will open for your one-time account setup.", entry.name)
+                            format!("{} is installed. Press Start. Valtic will try your router first, then guide you through free Tailscale if needed.", entry.name)
                         } else {
                             format!("{} is ready. Press Start, then give your friends the address below.", entry.name)
                         });
-                        if is_java {
-                            let tx = self.servers.tx.clone();
-                            std::thread::spawn(move || {
-                                if let Err(e) = servers::java::open_playit() {
-                                    let _ = tx.send(Event::Failed(format!("Playit.gg setup: {e}")));
-                                }
-                            });
-                        }
                     }
                     Err(p) => s.problem = Some(p),
                 }
@@ -892,7 +884,12 @@ impl Launcher {
         STARTED_HERE.lock().unwrap().push(dir.clone());
         self.servers.restart_needed.clear();
         if servers::java::is_java(&dir) {
-            self.server_job("Starting Java server", move |_log| servers::java::start(&dir));
+            self.server_job("Starting Java server", move |_log| {
+                let note = servers::java::start(&dir)?;
+                let port = servers::java::metadata(&dir).ok().map_or(25565, |m| m.port);
+                servers::connectivity::start(dir, port);
+                Ok(note)
+            });
             return;
         }
         self.server_job("Starting", move |log| {
@@ -915,7 +912,11 @@ impl Launcher {
             return;
         };
         if servers::java::is_java(&dir) {
-            self.server_job("Stopping Java server", move |_log| servers::java::stop(&dir));
+            self.server_job("Stopping Java server", move |_log| {
+                let note = servers::java::stop(&dir)?;
+                servers::connectivity::stop(&dir);
+                Ok(note)
+            });
             return;
         }
         self.server_job("Stopping", move |log| {
@@ -939,7 +940,10 @@ impl Launcher {
                 servers::java::stop(&dir)?;
                 for _ in 0..100 {
                     if !servers::java::is_running(&dir) {
-                        return servers::java::start(&dir);
+                        let note = servers::java::start(&dir)?;
+                        let port = servers::java::metadata(&dir).ok().map_or(25565, |m| m.port);
+                        servers::connectivity::start(dir.clone(), port);
+                        return Ok(note);
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }

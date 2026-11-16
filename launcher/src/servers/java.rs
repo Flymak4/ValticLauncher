@@ -495,51 +495,6 @@ pub fn set_config(dir: &Path, changes: &[(&str, String)]) -> Result<super::Appli
     }
     Ok(super::Applied { applied: changes.iter().map(|(k, _)| (*k).into()).collect(), ..Default::default() })
 }
-/// Launch the official Playit client. On Windows, Valtic obtains the signed portable
-/// executable from Playit's GitHub Releases and verifies the advertised SHA-256.
-pub fn open_playit() -> Result<(), String> {
-    if Command::new("playit").spawn().is_ok() {
-        return Ok(());
-    }
-    if !cfg!(windows) {
-        return Err("Install the official Playit.gg agent from https://playit.gg/download and link your account.".into());
-    }
-    let dir = crate::backend::data_dir().join("playit");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let exe = dir.join("playit-agent.exe");
-    if !exe.is_file() {
-        let release = fetch_json("https://api.github.com/repos/playit-cloud/playit-agent/releases/latest")?;
-        let asset = release["assets"].as_array()
-            .and_then(|items| items.iter().find(|a|
-                a["name"] == "playit-gui-windows-x86_64-signed.exe"))
-            .ok_or("Playit's signed Windows portable release was not found.")?;
-        let url = asset["browser_download_url"].as_str().ok_or("Invalid Playit download URL")?;
-        if !url.starts_with("https://github.com/playit-cloud/playit-agent/releases/download/") {
-            return Err("Unexpected Playit release URL.".into());
-        }
-        let expected = asset["digest"].as_str()
-            .and_then(|d| d.strip_prefix("sha256:"))
-            .ok_or("The Playit release did not include an SHA-256 checksum.")?;
-        download(url, &exe, None)?;
-        let check = (|| -> Result<(), String> {
-            let mut input = File::open(&exe).map_err(|e| e.to_string())?;
-            let mut hash = sha2::Sha256::new();
-            let mut buf = [0u8; 8192];
-            loop {
-                let count = input.read(&mut buf).map_err(|e| e.to_string())?;
-                if count == 0 { break; }
-                hash.update(&buf[..count]);
-            }
-            if format!("{:x}", hash.finalize()) != expected.to_lowercase() {
-                return Err("Playit agent verification failed; refused to execute it.".into());
-            }
-            Ok(())
-        })();
-        if check.is_err() { let _ = fs::remove_file(&exe); }
-        check?;
-    }
-    Command::new(exe).spawn().map(|_| ()).map_err(|e| format!("Couldn't start Playit: {e}"))
-}
 #[cfg(test)]
 mod tests {
     use super::*;
