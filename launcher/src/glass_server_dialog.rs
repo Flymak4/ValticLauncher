@@ -564,10 +564,25 @@ impl Launcher {
                     }))
             })),
         );
+        let release_options = c.versions.iter().take(7).cloned().collect::<Vec<_>>();
+        let chosen = self.servers.value(Field::JavaVersion).to_owned();
+        let version_tiles = div().flex().flex_wrap().gap(px(8.))
+            .children(release_options.into_iter().map(|v| {
+                let active = v == chosen;
+                choice(SharedString::from(format!("create-mc-{}", v)), active, &t)
+                    .px(px(12.)).py(px(8.))
+                    .child(ui::text(13., FontWeight::MEDIUM, ink::FULL).child(v.clone()))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.servers.text(Field::JavaVersion).set(v.clone());
+                        cx.notify();
+                    }))
+            }));
         let version = section(
             "Minecraft version".into(),
             None,
-            self.field(Field::JavaVersion, "26.3", 400., cx).w_full(),
+            div().flex().flex_col().gap(px(10.))
+                .child(self.field(Field::JavaVersion, "26.3", 400., cx).w_full())
+                .child(version_tiles),
         );
         let ram_controls = strip()
             .items_center()
