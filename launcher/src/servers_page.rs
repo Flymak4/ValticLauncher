@@ -697,11 +697,21 @@ impl Launcher {
                         s.list = servers::list();
                         s.modes.clear();
                         s.modes.clear();
+                        let is_java = servers::java::is_java(&entry.dir);
                         self.open_server(entry.dir.clone());
-                        self.servers.note = Some(format!(
-                            "{} is ready. Press Start, then give your friends the address below.",
-                            entry.name
-                        ));
+                        self.servers.note = Some(if is_java {
+                            format!("{} is installed. Press Start. Playit.gg will open for your one-time account setup.", entry.name)
+                        } else {
+                            format!("{} is ready. Press Start, then give your friends the address below.", entry.name)
+                        });
+                        if is_java {
+                            let tx = self.servers.tx.clone();
+                            std::thread::spawn(move || {
+                                if let Err(e) = servers::java::open_playit() {
+                                    let _ = tx.send(Event::Failed(format!("Playit.gg setup: {e}")));
+                                }
+                            });
+                        }
                     }
                     Err(p) => s.problem = Some(p),
                 }
