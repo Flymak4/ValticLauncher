@@ -125,7 +125,12 @@ fn download(url: &str, dest: &Path, sha1: Option<&str>) -> Result<(), String> {
         if let Some(expected) = sha1 {
             let mut file = File::open(&temp).map_err(|e| e.to_string())?;
             let mut hash = Sha1::new();
-            std::io::copy(&mut file, &mut hash).map_err(|e| e.to_string())?;
+            let mut buffer = [0u8; 8192];
+            loop {
+                let len = file.read(&mut buffer).map_err(|e| e.to_string())?;
+                if len == 0 { break; }
+                hash.update(&buffer[..len]);
+            }
             if format!("{:x}", hash.finalize()) != expected.to_ascii_lowercase() {
                 return Err("Mojang server checksum mismatch. Download cancelled.".into());
             }
@@ -235,12 +240,16 @@ fn find_args(dir: &Path, path: &str, release: &str) -> Option<String> {
     let base = dir.join("libraries").join(path).join(release);
     let platform = if cfg!(windows) { "win_args.txt" } else { "unix_args.txt" };
     let file = base.join(platform);
-    file.is_file().then(|| file.strip_prefix(dir).ok()?.to_string_lossy().replace('\\', "/"))
+    if file.is_file() {
+        file.strip_prefix(dir).ok().map(|p| p.to_string_lossy().replace('\\', "/"))
+    } else {
+        None
+    }
 }
 fn properties(spec: &NewServer, port: u16) -> String {
-    let name = spec.name.replace(['\n', '\r', '=', '\\'], " ");
+    let name: String = spec.name.chars().map(|c| if ['\n', '\r', '=', '\\'].contains(&c) { ' ' } else { c }).collect();
     let seed = match &spec.world { World::New { seed } => seed.as_str(), _ => "" }
-        .replace(['\n', '\r', '=', '\\'], "");
+        .chars().filter(|c| !['\n', '\r', '=', '\\'].contains(c)).collect::<String>();
     format!(
         "server-port={port}\nserver-ip=\nmotd={name}\nmax-players={}\ngamemode={}\ndifficulty={}\nlevel-name=world\nlevel-seed={seed}\nonline-mode={}\nwhite-list={}\nenforce-whitelist=false\npvp=true\n",
         spec.max_players.clamp(1, 100),
@@ -286,7 +295,7 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, l
     result.map_err(Problem::plain)
 }
 fn launch_args(meta: &Metadata) -> Vec<String> {
-    let mut args = vec![format!("-Xms1G"), format!("-Xmx{}G", meta.ram_gb)];
+    let mut args = vec!["-Xms1G".to_string(), format!("-Xmx{}G", meta.ram_gb)];
     match &meta.launch {
         Launch::Jar(file) => args.extend(["-jar".into(), file.clone(), "nogui".into()]),
         Launch::Argfile(file) => args.extend([format!("@{file}"), "nogui".into()]),
@@ -337,7 +346,7 @@ pub fn status(dir: &Path) -> Status {
     result
 }
 pub fn command(dir: &Path, line: &str) -> Result<(), String> {
-    if line.contains(['\r', '\n']) || line.len() > 1000 {
+    if line.contains('\r') || line.contains('\n') || line.len() > 1000 {
         return Err("Only a single server command is allowed.".into());
     }
     let mut active = RUNNING.lock().map_err(|e| e.to_string())?;
@@ -396,7 +405,7 @@ pub fn set_config(dir: &Path, changes: &[(&str, String)]) -> Result<super::Appli
             "world.name" => "level-name",
             _ => return Err(Problem::plain(format!("Unsupported Java server setting: {key}"))),
         };
-        if value.contains(['\n', '\r']) || value.len() > 500 {
+        if value.contains('\n') || value.contains('\r') || value.len() > 500 {
             return Err(Problem::plain("Setting value contains unsupported characters."));
         }
         if mapped == "server-port" && value.parse::<u16>().ok().filter(|p| *p > 0).is_none() {
