@@ -4,7 +4,9 @@
 //! the launcher reads `tailscale status` and, with the player's own access token, calls the API.
 use super::servers_page::Field;
 use super::*;
+use horizon_launcher::servers;
 use horizon_launcher::tailscale::{self, Api, Invite, Reach, State};
+use std::path::PathBuf;
 use serde_json::Value;
 
 /// How often Tailscale's state is read while the panel shows.
