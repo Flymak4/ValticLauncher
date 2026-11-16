@@ -77,6 +77,11 @@ jobs:
             ':(exclude)crates/horizon-client/src/horizon_look.rs'
             ':(exclude)crates/horizon-client/src/ui_theme.rs'
             ':(exclude)crates/horizon-client-render/src/gfx/panorama.rs'
+            # Valtic uses its own inlined social/friends and presence handler.
+            # Horizon split it into submodules; merging one side alone breaks it.
+            # Keep the complete Valtic implementation together until ported.
+            ':(exclude)crates/horizon-client-render/src/social.rs'
+            ':(exclude)crates/horizon-client-render/src/social/**'
             ':(exclude)crates/horizon-client/src/game/window_handler.rs'
             ':(exclude)crates/horizon-client/src/game/split/windows.rs'
             ':(exclude)crates/horizon-client/src/game/startup_menu.rs'
