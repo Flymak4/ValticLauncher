@@ -128,8 +128,11 @@ pub fn delete(dir: &Path) -> Result<(), String> {
     if !list().iter().any(|entry| entry.dir == dir) {
         return Err("This server is no longer in the launcher’s list.".into());
     }
-    if java::is_java(dir) && java::is_running(dir) {
-        return Err("Stop the Java server before deleting it.".into());
+    if java::is_java(dir) {
+        java::trash_stopped(dir, crate::desktop_seams::to_trash)?;
+        return forget(dir).map_err(|e| {
+            format!("The Java server was moved to the trash, but its list could not be saved: {e}")
+        });
     }
     if service_installed(dir) {
         return Err("Turn off running in the background before deleting this server.".into());
