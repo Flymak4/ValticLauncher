@@ -141,7 +141,11 @@ jobs:
             cargo metadata --format-version 1 --no-deps --manifest-path launcher/Cargo.toml >/dev/null
             git add launcher/Cargo.lock
           fi
-          git diff --cached --check
+          # Upstream occasionally ships formatting-only trailing whitespace.
+          # Keep visibility, but do not block the compile gates over whitespace.
+          if ! git diff --cached --check; then
+            echo "::warning::Upstream engine changes contain whitespace errors; Windows compilation remains mandatory."
+          fi
           printf '%s\n' "$tip" > .valtic/horizon-upstream-base
           git add .valtic/horizon-upstream-base
           source_count="$(git diff --cached --name-only | grep -cv '^.valtic/horizon-upstream-base$' || true)"
