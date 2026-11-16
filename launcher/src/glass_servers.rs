@@ -68,7 +68,9 @@ impl Launcher {
         );
         // Sculk's banner right under the server, where it is seen without scrolling past the
         // server's tabs (as before the glass look, under the page's actions).
-        page = page.children(self.glass_sculk(cx));
+        if !open.as_ref().is_some_and(|dir| servers::java::is_java(dir)) {
+            page = page.children(self.glass_sculk(cx));
+        }
         if let Some(dir) = &open {
             page = page.child(self.glass_server_tabs(dir, &status, cx));
         }
@@ -152,6 +154,10 @@ impl Launcher {
         corner = corner.child(if running {
             let d = dir.to_path_buf();
             panel.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if servers::java::is_java(&d) {
+                    crate::glass_toast::open(cx, &d);
+                    return;
+                }
                 match servers::Api::open(&d).map(|a| a.panel_link()) {
                     Some(Ok(url)) => cx.open_url(&url),
                     Some(Err(e)) => this.servers.problem = Some(Problem::plain(e)),
@@ -175,7 +181,7 @@ impl Launcher {
             buttons = buttons.child(if idle {
                 restart.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.servers.restart_needed.clear();
-                    this.server_command("Restarting", vec!["restart".into()]);
+                    this.restart_server();
                     cx.notify();
                 }))
             } else {
@@ -184,7 +190,7 @@ impl Launcher {
             let stop = ui::solid("server-start", tr("Stop"), 44., 14., &t).px(px(24.));
             buttons = buttons.child(if idle {
                 stop.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.server_command("Stopping", vec!["stop".into()]);
+                    this.stop_server();
                     cx.notify();
                 }))
             } else {
@@ -385,7 +391,7 @@ impl Launcher {
                 .child(if idle {
                     restart.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.servers.restart_needed.clear();
-                        this.server_command("Restarting", vec!["restart".into()]);
+                        this.restart_server();
                         cx.notify();
                     }))
                 } else {
@@ -682,7 +688,11 @@ impl Launcher {
                 ))
                 .mt(px(4.)),
             );
-        let internet = self.glass_internet(port, cx);
+        let internet = if self.servers.open.as_ref().is_some_and(|d| servers::java::is_java(d)) {
+            self.glass_playit(port, cx)
+        } else {
+            self.glass_internet(port, cx)
+        };
         let mut card = glass::plate(radius::PANEL)
             .flex()
             .flex_col()
@@ -730,6 +740,29 @@ impl Launcher {
             );
         }
         card
+    }
+
+    /// Playit.gg provides a public TCP tunnel without opening router ports.
+    /// Its own app handles account authorisation; never invent a hostname.
+    fn glass_playit(&mut self, port: u16, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        div()
+            .flex().flex_col().gap(px(10.))
+            .child(ui::card_heading("Over the internet · Playit.gg"))
+            .child(ui::card_note(format!(
+                "Connect a Minecraft Java tunnel to 127.0.0.1:{port} in Playit.gg. A one-time account setup is required."
+            )))
+            .child(div().flex().flex_wrap().gap(px(8.))
+                .child(ui::quiet("playit-start", "Launch Playit", 36., &t)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        if let Err(e) = servers::java::open_playit() {
+                            this.servers.problem = Some(Problem::plain(e));
+                            cx.open_url("https://playit.gg/download");
+                        }
+                        cx.notify();
+                    })))
+                .child(ui::quiet("playit-config", "Manage tunnels", 36., &t)
+                    .on_click(|_, _, cx| cx.open_url("https://playit.gg/account/tunnels"))))
     }
 
     /// The server's Players, Settings and Backups (not in the mockup), on a glass under it.
