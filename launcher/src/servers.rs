@@ -51,10 +51,15 @@ impl Entry {
 
 #[path = "servers/remote.rs"]
 pub mod remote;
+#[path = "servers/java.rs"]
+pub mod java;
 
 /// The game mode a server's `server.toml` sets (`[world] game_mode`), read from the file
 /// without asking `horizon-server`: the Servers page's list says it for each stopped server.
 pub fn game_mode(dir: &Path) -> Option<String> {
+    if java::is_java(dir) {
+        return java::config(dir)?["world"]["game_mode"].as_str().map(str::to_owned);
+    }
     let text = fs::read_to_string(dir.join("server.toml")).ok()?;
     let config: toml::Value = toml::from_str(&text).ok()?;
     config
@@ -122,6 +127,9 @@ pub fn forget_remote(host: &str, dir: &Path) -> Result<(), String> {
 pub fn delete(dir: &Path) -> Result<(), String> {
     if !list().iter().any(|entry| entry.dir == dir) {
         return Err("This server is no longer in the launcher’s list.".into());
+    }
+    if java::is_java(dir) && java::is_running(dir) {
+        return Err("Stop the Java server before deleting it.".into());
     }
     if service_installed(dir) {
         return Err("Turn off running in the background before deleting this server.".into());
@@ -624,6 +632,12 @@ pub fn free_port(from: u16, taken: &[u16]) -> u16 {
 fn ports_taken() -> Vec<u16> {
     let mut out = Vec::new();
     for e in list() {
+        if java::is_java(&e.dir) {
+            if let Ok(meta) = java::metadata(&e.dir) {
+                out.push(meta.port);
+            }
+            continue;
+        }
         if let Some(c) = config(&e.dir) {
             out.extend(c["server"]["port"].as_u64().map(|p| p as u16));
             out.extend(
@@ -798,6 +812,9 @@ fn copy_world(from: &Path, to: &Path) -> std::io::Result<()> {
 /// The settings, as `horizon-server config --json` prints them (`None` before `init`, or from a
 /// `horizon-server` older than the command).
 pub fn config(dir: &Path) -> Option<Value> {
+    if java::is_java(dir) {
+        return java::config(dir);
+    }
     if !dir.join("server.toml").is_file() {
         return None;
     }
@@ -819,6 +836,9 @@ pub struct Applied {
 /// Changes settings through `horizon-server config set` (checked there; nothing is written if one is
 /// wrong).
 pub fn set_config(dir: &Path, changes: &[(&str, String)]) -> Result<Applied, Problem> {
+    if java::is_java(dir) {
+        return java::set_config(dir, changes);
+    }
     let pairs: Vec<String> = changes.iter().map(|(k, v)| format!("{k}={v}")).collect();
     let mut args = vec!["config", "set"];
     args.extend(pairs.iter().map(String::as_str));
@@ -862,6 +882,9 @@ pub struct Backup {
 }
 
 pub fn backups(dir: &Path) -> Result<Vec<Backup>, Problem> {
+    if java::is_java(dir) {
+        return Ok(Vec::new());
+    }
     let out = run(dir, &["backups", "--json"])?;
     serde_json::from_str(out.trim()).map_err(|e| Problem::plain(e.to_string()))
 }
@@ -877,6 +900,9 @@ pub fn lan_address() -> Option<std::net::IpAddr> {
 
 /// Whether the server starts at login: the service definition `horizon-server service print` names exists.
 pub fn service_installed(dir: &Path) -> bool {
+    if java::is_java(dir) {
+        return false;
+    }
     if cfg!(windows) {
         let name = format!("horizon-server-{}", service_suffix(dir));
         return crate::process::command("schtasks")
@@ -1088,6 +1114,9 @@ impl Status {
 
 /// The status of the server in `dir`: what its API says, or stopped.
 pub fn status(dir: &Path) -> Status {
+    if java::is_java(dir) {
+        return java::status(dir);
+    }
     Api::open(dir)
         .and_then(|api| api.status())
         .unwrap_or_else(Status::stopped)
