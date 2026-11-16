@@ -1354,6 +1354,7 @@ impl Launcher {
             Field::InstanceName
             | Field::InstanceGroup
             | Field::InstanceVersion
+            | Field::JavaVersion
             | Field::InstanceModsFilter
             | Field::ConsoleSearch
             | Field::DeleteServer
