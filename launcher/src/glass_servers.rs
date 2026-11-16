@@ -31,7 +31,7 @@ impl Launcher {
     pub(super) fn glass_servers_page(&mut self, cx: &mut Context<Self>) -> Div {
         let head = glass_ui::page_head(
             tr("Servers"),
-            tr("Create a Vanilla, Fabric, Forge or NeoForge server, manage it here, and invite friends with Playit.gg."),
+            tr("Create a Vanilla, Fabric, Forge or NeoForge server, host it on your PC, and invite friends for free."),
         );
         // The mockup always shows a server: the open one, else the first.
         if self.servers.open.is_none() {
@@ -702,7 +702,7 @@ impl Launcher {
                 .mt(px(4.)),
             );
         let internet = if self.servers.open.as_ref().is_some_and(|d| servers::java::is_java(d)) {
-            self.glass_playit(port, cx)
+            self.glass_java_internet(port, cx)
         } else {
             self.glass_internet(port, cx)
         };
