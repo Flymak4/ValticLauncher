@@ -225,6 +225,8 @@ impl Launcher {
         let details = c.details.clone();
         let (mode, difficulty, max) = (c.mode, c.difficulty, c.max_players);
         let (software, ram_gb) = (c.software, c.ram_gb);
+        // Copy the version choices before creating widgets that mutably borrow self.
+        let release_options = c.versions.iter().take(7).cloned().collect::<Vec<_>>();
         let (friends_only, check, friends) = (c.friends_only, c.check_accounts, c.friends.clone());
         let creating = self.servers.creating;
         // The mockup's `clamp(1.6rem, 2.4vw, 2.1rem)`.
@@ -564,7 +566,6 @@ impl Launcher {
                     }))
             })),
         );
-        let release_options = c.versions.iter().take(7).cloned().collect::<Vec<_>>();
         let chosen = self.servers.value(Field::JavaVersion).to_owned();
         let version_tiles = div().flex().flex_wrap().gap(px(8.))
             .children(release_options.into_iter().map(|v| {
