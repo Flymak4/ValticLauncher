@@ -129,16 +129,18 @@ jobs:
             sed -i '/^members = \[/a\    "crates/horizon-mods",' Cargo.toml
             git add Cargo.toml
           fi
-          # Ensure both engine and launcher lockfiles reflect staged paths.
-          cargo metadata --format-version 1 --no-deps >/dev/null
+          # Cargo metadata --no-deps does NOT ensure a consistent Cargo.lock.
+          # Resolve workspace dependency changes before the Windows --locked
+          # builds, retaining existing third-party pins when possible.
+          cargo update --workspace --manifest-path Cargo.toml
+          cargo metadata --locked --format-version 1 --no-deps --manifest-path Cargo.toml >/dev/null
           git add Cargo.lock
 
-          # Upstream can add/change path dependencies used by the standalone
-          # Valtic launcher workspace. Refresh its tracked Cargo.lock on the
-          # staged branch; otherwise Windows --locked fails despite a valid game.
-          # This happens before verification so the exact lockfile is tested.
+          # The Valtic launcher is intentionally a separate Cargo workspace.
+          # Re-resolve its local engine crates as well and verify the lockfile.
           if [[ -f launcher/Cargo.toml ]]; then
-            cargo metadata --format-version 1 --no-deps --manifest-path launcher/Cargo.toml >/dev/null
+            cargo update --workspace --manifest-path launcher/Cargo.toml
+            cargo metadata --locked --format-version 1 --no-deps --manifest-path launcher/Cargo.toml >/dev/null
             git add launcher/Cargo.lock
           fi
           # Upstream occasionally ships formatting-only trailing whitespace.
