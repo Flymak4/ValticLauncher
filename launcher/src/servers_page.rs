@@ -392,7 +392,9 @@ pub(super) fn stop_on_quit() {
         if servers::service_installed(&dir) {
             continue;
         }
-        if let Some(api) = servers::Api::open(&dir) {
+        if servers::java::is_java(&dir) {
+            let _ = servers::java::stop(&dir);
+        } else if let Some(api) = servers::Api::open(&dir) {
             let _ = api.call("POST", "/api/v1/stop", None);
         }
     }
@@ -577,12 +579,14 @@ impl Launcher {
                     0
                 };
                 std::thread::spawn(move || {
-                    let api = servers::Api::open(&dir);
-                    let status = api
-                        .as_ref()
-                        .and_then(|a| a.status())
-                        .unwrap_or_else(Status::stopped);
-                    let logs = api.and_then(|a| a.logs(since));
+                    let (status, logs) = if servers::java::is_java(&dir) {
+                        (servers::java::status(&dir), servers::java::logs(&dir, since))
+                    } else {
+                        let api = servers::Api::open(&dir);
+                        let status = api.as_ref().and_then(|a| a.status()).unwrap_or_else(Status::stopped);
+                        let logs = api.and_then(|a| a.logs(since));
+                        (status, logs)
+                    };
                     let _ = tx.send(Event::Polled {
                         dir,
                         status: Box::new(status),
@@ -769,7 +773,9 @@ impl Launcher {
         };
         let tx = self.servers.tx.clone();
         std::thread::spawn(move || {
-            let on = servers::Api::open(&dir)
+            let on = if servers::java::is_java(&dir) {
+                None
+            } else { servers::Api::open(&dir)
                 .and_then(|a| a.command("gamerule pvp").ok())
                 .and_then(|out| {
                     let text = out.join(" ");
@@ -835,9 +841,13 @@ impl Launcher {
         self.servers.log.push_back(format!("> {line}"));
         self.servers.console_scroll.handle.scroll_to_bottom();
         std::thread::spawn(move || {
-            let result = servers::Api::open(&dir)
-                .ok_or_else(|| "The server isn't running.".to_string())
-                .and_then(|a| a.command(&line));
+            let result = if servers::java::is_java(&dir) {
+                servers::java::command(&dir, &line).map(|_| Vec::new())
+            } else {
+                servers::Api::open(&dir)
+                    .ok_or_else(|| "The server isn't running.".to_string())
+                    .and_then(|a| a.command(&line))
+            };
             if let Err(e) = result {
                 let _ = tx.send(Event::Failed(e));
             }
@@ -850,6 +860,10 @@ impl Launcher {
         };
         STARTED_HERE.lock().unwrap().push(dir.clone());
         self.servers.restart_needed.clear();
+        if servers::java::is_java(&dir) {
+            self.server_job("Starting Java server", move |_log| servers::java::start(&dir));
+            return;
+        }
         self.server_job("Starting", move |log| {
             if let Some(api) = servers::Api::open(&dir) {
                 if let Ok(status) = api.call("GET", "/api/v1/status", None) {
@@ -869,6 +883,10 @@ impl Launcher {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        if servers::java::is_java(&dir) {
+            self.server_job("Stopping Java server", move |_log| servers::java::stop(&dir));
+            return;
+        }
         self.server_job("Stopping", move |log| {
             // The running server's API first; when it can't be reached or refuses, the CLI,
             // whose error is the job's.
@@ -885,6 +903,19 @@ impl Launcher {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        if servers::java::is_java(&dir) {
+            self.server_job("Restarting Java server", move |_log| {
+                servers::java::stop(&dir)?;
+                for _ in 0..100 {
+                    if !servers::java::is_running(&dir) {
+                        return servers::java::start(&dir);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(Problem::plain("The server is still stopping. Start it once it has exited."))
+            });
+            return;
+        }
         self.server_job("Restarting", move |log| {
             // The running server's API first; when it can't be reached or refuses, the CLI,
             // whose error is the job's.
