@@ -45,6 +45,7 @@ pub(super) enum Field {
     InstanceGroup,
     /// Its search in Mojang's versions (`new_instance.rs`).
     InstanceVersion,
+    JavaVersion,
     /// Home's Mods tab's filter (`instance_mods.rs`).
     InstanceModsFilter,
     /// Home's Multiplayer section's (`multiplayer_page.rs`).
@@ -67,7 +68,7 @@ pub(super) enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 24] = [
+    const ALL: [Field; 25] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -80,6 +81,7 @@ impl Field {
         Field::InstanceName,
         Field::InstanceGroup,
         Field::InstanceVersion,
+        Field::JavaVersion,
         Field::InstanceModsFilter,
         Field::ServerName,
         Field::ServerAddress,
@@ -115,6 +117,8 @@ const MODES: [(&str, &str); 3] = [
     ("creative", "Creative"),
     ("adventure", "Adventure"),
 ];
+
+const SOFTWARES: [(&str, &str); 4] = [("vanilla", "Vanilla"), ("fabric", "Fabric"), ("forge", "Forge"), ("neoforge", "NeoForge")];
 
 const DIFFICULTIES: [(&str, &str); 4] = [
     ("peaceful", "Peaceful"),
@@ -159,6 +163,8 @@ pub(super) struct Create {
     /// once when the dialog opens.
     details: HashMap<PathBuf, (String, String)>,
     mode: &'static str,
+    software: &'static str,
+    ram_gb: u8,
     difficulty: &'static str,
     max_players: u32,
     friends_only: bool,
@@ -957,6 +963,7 @@ impl Launcher {
             .set(if glass { String::new() } else { name });
         self.servers.selected = (!glass).then_some(Field::Name);
         self.servers.text(Field::Seed).set(String::new());
+        self.servers.text(Field::JavaVersion).set("26.3".to_string());
         self.servers
             .text(Field::Players)
             .set(if glass { String::new() } else { own.clone() });
@@ -983,6 +990,8 @@ impl Launcher {
             copy: worlds.first().map(|w| w.1.clone()),
             worlds,
             mode: "survival",
+            software: "vanilla",
+            ram_gb: 4,
             difficulty: "normal",
             max_players: 10,
             friends_only: true,
@@ -1038,7 +1047,9 @@ impl Launcher {
             players,
             eula: c.eula,
         };
-        let tag = self.selected().cloned();
+        let software = servers::java::Software::parse(c.software).unwrap_or(servers::java::Software::Vanilla);
+        let minecraft_version = self.servers.value(Field::JavaVersion).trim().to_string();
+        let ram_gb = c.ram_gb;
         let tx = self.servers.tx.clone();
         self.servers.creating = true;
         self.servers.problem = None;
@@ -1048,7 +1059,7 @@ impl Launcher {
             let log = move |l: String| {
                 let _ = lines.send(Event::Line(l));
             };
-            let _ = tx.send(Event::Created(servers::create(&spec, tag.as_deref(), &log)));
+            let _ = tx.send(Event::Created(servers::java::create(&spec, software, &minecraft_version, ram_gb, &log)));
         });
     }
 
