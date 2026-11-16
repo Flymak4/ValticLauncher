@@ -53,6 +53,8 @@ impl Entry {
 pub mod remote;
 #[path = "servers/java.rs"]
 pub mod java;
+#[path = "servers/connectivity.rs"]
+pub mod connectivity;
 
 /// The game mode a server's `server.toml` sets (`[world] game_mode`), read from the file
 /// without asking `horizon-server`: the Servers page's list says it for each stopped server.
