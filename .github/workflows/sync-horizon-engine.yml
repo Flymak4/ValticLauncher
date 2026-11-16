@@ -82,6 +82,10 @@ jobs:
             # Keep the complete Valtic implementation together until ported.
             ':(exclude)crates/horizon-client-render/src/social.rs'
             ':(exclude)crates/horizon-client-render/src/social/**'
+            # The standalone Valtic launcher still depends on this legacy mod
+            # registry crate. Horizon removed it upstream; preserve it until
+            # the Valtic mod browser is explicitly migrated and rebuilt.
+            ':(exclude)crates/horizon-mods/**'
             ':(exclude)crates/horizon-client/src/game/window_handler.rs'
             ':(exclude)crates/horizon-client/src/game/split/windows.rs'
             ':(exclude)crates/horizon-client/src/game/startup_menu.rs'
@@ -118,6 +122,17 @@ jobs:
               exit 1
             fi
           fi
+          # Horizon removed the old horizon-mods member while Valtic Launcher
+          # still uses its index API. Keep the crate and workspace membership
+          # until the launcher has been safely ported to the replacement API.
+          if ! grep -Fq '"crates/horizon-mods",' Cargo.toml; then
+            sed -i '/^members = \[/a\    "crates/horizon-mods",' Cargo.toml
+            git add Cargo.toml
+          fi
+          # Ensure both engine and launcher lockfiles reflect staged paths.
+          cargo metadata --format-version 1 --no-deps >/dev/null
+          git add Cargo.lock
+
           # Upstream can add/change path dependencies used by the standalone
           # Valtic launcher workspace. Refresh its tracked Cargo.lock on the
           # staged branch; otherwise Windows --locked fails despite a valid game.
