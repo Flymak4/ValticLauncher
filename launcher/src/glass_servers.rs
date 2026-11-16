@@ -755,31 +755,6 @@ impl Launcher {
         card
     }
 
-    /// Playit.gg provides a public TCP tunnel without opening router ports.
-    /// Its own app handles account authorisation; never invent a hostname.
-    fn glass_playit(&mut self, port: u16, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        div()
-            .flex().flex_col().gap(px(10.))
-            .child(ui::card_heading("Over the internet · Playit.gg"))
-            .child(ui::card_note(format!(
-                "Connect a Minecraft Java tunnel to 127.0.0.1:{port} in Playit.gg. A one-time account setup is required."
-            )))
-            .child(div().flex().flex_wrap().gap(px(8.))
-                .child(ui::quiet("playit-start", "Launch Playit", 36., &t)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        let tx = this.servers.tx.clone();
-                        std::thread::spawn(move || {
-                            if let Err(e) = servers::java::open_playit() {
-                                let _ = tx.send(Event::Failed(e));
-                            }
-                        });
-                        cx.notify();
-                    })))
-                .child(ui::quiet("playit-config", "Manage tunnels", 36., &t)
-                    .on_click(|_, _, cx| cx.open_url("https://playit.gg/account/tunnels"))))
-    }
-
     /// The server's Players, Settings and Backups (not in the mockup), on a glass under it.
     fn glass_server_tabs(&mut self, dir: &Path, status: &Status, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
