@@ -508,7 +508,7 @@ impl Launcher {
                         "create-anyone",
                         !friends_only,
                         tr("Anyone with the address").into(),
-                        tr("Keep it on your network or Tailscale").to_string(),
+                        tr("Share the public Java address with anyone").to_string(),
                     )
                     .on_click(set(cx, |c| c.friends_only = false)),
                 ),
