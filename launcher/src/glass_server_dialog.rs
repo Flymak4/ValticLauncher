@@ -566,7 +566,7 @@ impl Launcher {
         );
         let version = section(
             "Minecraft version".into(),
-            Some("Official released Java version, e.g. 26.3"),
+            None,
             self.field(Field::JavaVersion, "26.3", 400., cx).w_full(),
         );
         let ram_controls = strip()
