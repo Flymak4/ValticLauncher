@@ -50,7 +50,9 @@ jobs:
             exit 1
           fi
           git remote add horizon-upstream https://github.com/horizon-rust/horizon.git
-          git fetch --no-tags --filter=blob:none --depth=1 horizon-upstream main
+          # Fetch actual blob contents: git apply --3way requires baseline blobs.
+          # Blobless shallow fetches previously caused false missing-blob conflicts.
+          git fetch --no-tags --depth=1 horizon-upstream main
           tip="$(git rev-parse FETCH_HEAD)"
           echo "upstream=$tip" >> "$GITHUB_OUTPUT"
           echo "Checking upstream change $base -> $tip"
@@ -80,9 +82,28 @@ jobs:
             ':(exclude)crates/horizon-client/src/game/startup_menu.rs'
             ':(exclude)crates/horizon-client/src/game/world_entry.rs'
           )
-          git fetch --no-tags --filter=blob:none --depth=1 horizon-upstream "$base"
+          git fetch --no-tags --depth=1 horizon-upstream "$base"
           git switch -c automation/horizon-engine-sync
-          git diff --binary --no-renames "$base" "$tip" -- "${ENGINE_PATHS[@]}" > "$RUNNER_TEMP/horizon-engine.patch"
+
+          # Ignore upstream changes Valtic already contains. In particular,
+          # upstream may delete files already absent from the Valtic fork;
+          # including such deletions makes git apply fail with "not in index".
+          # Never skip a divergent file: let the three-way merge reject genuine
+          # Valtic custom-code conflicts rather than overwriting them.
+          patch_paths=()
+          while IFS= read -r -d '' path; do
+            if [[ "$(git ls-tree HEAD -- "$path")" == "$(git ls-tree "$tip" -- "$path")" ]]; then
+              echo "Already matches upstream: $path"
+              continue
+            fi
+            patch_paths+=("$path")
+          done < <(git diff --name-only -z --no-renames "$base" "$tip" -- "${ENGINE_PATHS[@]}")
+
+          if (( ${#patch_paths[@]} > 0 )); then
+            git diff --binary --no-renames "$base" "$tip" -- "${patch_paths[@]}" > "$RUNNER_TEMP/horizon-engine.patch"
+          else
+            : > "$RUNNER_TEMP/horizon-engine.patch"
+          fi
 
           if [[ -s "$RUNNER_TEMP/horizon-engine.patch" ]]; then
             if ! git apply --3way --index --whitespace=nowarn "$RUNNER_TEMP/horizon-engine.patch"; then
