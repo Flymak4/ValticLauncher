@@ -160,6 +160,7 @@ pub(super) enum Event {
     Line(String),
     Done(Result<String, Problem>),
     Created(Result<Entry, Problem>),
+    Edited(Result<Entry, Problem>),
     Deleted {
         dir: PathBuf,
         result: Result<(), String>,
@@ -179,6 +180,8 @@ pub(super) enum Event {
 
 /// The Create dialog's answers.
 pub(super) struct Create {
+    /// Existing server being edited; none when creating a new server.
+    editing: Option<PathBuf>,
     new_world: bool,
     copy: Option<PathBuf>,
     worlds: Vec<(String, PathBuf)>,
@@ -738,6 +741,23 @@ impl Launcher {
                 self.load_details();
                 true
             }
+            Event::Edited(result) => {
+                s.creating = false;
+                match result {
+                    Ok(entry) => {
+                        s.create = None;
+                        s.list = servers::list();
+                        s.modes.clear();
+                        s.note = Some(format!(
+                            "Saved {}. Existing worlds and backups were kept. Restart the server to apply the changes.",
+                            entry.name
+                        ));
+                        self.load_details();
+                    }
+                    Err(problem) => s.problem = Some(problem),
+                }
+                true
+            }
             Event::Created(result) => {
                 s.creating = false;
                 match result {
@@ -1121,6 +1141,7 @@ impl Launcher {
         self.servers.problem = None;
         self.servers.create_scroll = Scrollbar::default();
         self.servers.create = Some(Create {
+            editing: None,
             new_world: true,
             copy: worlds.first().map(|w| w.1.clone()),
             worlds,
@@ -1145,7 +1166,138 @@ impl Launcher {
         });
     }
 
+    /// Open the original setup form with this server's actual settings filled
+    /// in. Worlds, files, backups and ports stay as they are when editing.
+    fn open_edit_server(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = self.servers.open.clone() else { return; };
+        let name = self.servers.list.iter()
+            .find(|entry| entry.dir == dir)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| "My server".into());
+        let java = if servers::java::is_java(&dir) {
+            match servers::java::metadata(&dir) {
+                Ok(metadata) => Some(metadata),
+                Err(error) => {
+                    self.servers.problem = Some(Problem::plain(error));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let Some(config) = servers::config(&dir) else {
+            self.servers.problem = Some(Problem::plain("Could not read this server's saved settings."));
+            return;
+        };
+        let existing_friends: Vec<String> = servers::entries(&dir, "whitelist.json")
+            .into_iter().map(|(name, _)| name).collect();
+        self.open_create(cx);
+        self.servers.text(Field::Name).set(name);
+        self.servers.text(Field::Players).set(String::new());
+        if let Some(meta) = &java {
+            self.servers.text(Field::JavaVersion).set(meta.minecraft_version.clone());
+        }
+        let selected = |key: &str, table: &[(&'static str, &'static str)], fallback: &'static str| {
+            table.iter().find(|(id, _)| *id == key).map_or(fallback, |(id, _)| *id)
+        };
+        let Some(c) = self.servers.create.as_mut() else { return; };
+        c.editing = Some(dir);
+        c.software = match java.as_ref().map(|meta| meta.software) {
+            Some(servers::java::Software::Vanilla) => "vanilla",
+            Some(servers::java::Software::Paper) => "paper",
+            Some(servers::java::Software::Fabric) => "fabric",
+            Some(servers::java::Software::Forge) => "forge",
+            Some(servers::java::Software::Neoforge) => "neoforge",
+            None => "rust",
+        };
+        c.ram_gb = java.as_ref().map_or(4, |meta| meta.ram_gb);
+        c.voice_chat = java.as_ref().is_some_and(|meta| meta.voice_chat);
+        c.geyser = java.as_ref().is_some_and(|meta| meta.geyser);
+        c.mode = selected(config["world"]["game_mode"].as_str().unwrap_or("survival"), &MODES, "survival");
+        c.difficulty = selected(config["world"]["difficulty"].as_str().unwrap_or("normal"), &DIFFICULTIES, "normal");
+        c.max_players = config["server"]["max_players"].as_u64().unwrap_or(10).clamp(1, 100) as u32;
+        c.friends_only = config["server"]["whitelist"].as_bool().unwrap_or(true);
+        c.check_accounts = config["server"]["online_mode"].as_bool().unwrap_or(true);
+        c.friends = existing_friends;
+        c.eula = true; // The existing server already accepted the EULA.
+        c.eula_missing = false;
+    }
+
+    /// Apply an existing server's editable settings; never recreate its world.
+    fn save_existing_server(&mut self) {
+        if self.servers.creating { return; }
+        let Some(c) = self.servers.create.as_ref() else { return; };
+        let Some(dir) = c.editing.clone() else { return; };
+        if self.servers.statuses.get(&dir).is_some_and(|s| s.running())
+            || (servers::java::is_java(&dir) && servers::java::is_running(&dir))
+        {
+            self.servers.problem = Some(Problem::plain(
+                "Stop the server before editing its setup. Its worlds and files will be preserved."
+            ));
+            return;
+        }
+        let software = c.software;
+        let version = self.servers.value(Field::JavaVersion).to_string();
+        let ram = c.ram_gb;
+        let addons = servers::addons::Addons { voice_chat: c.voice_chat, geyser: c.geyser };
+        let name = self.servers.value(Field::Name).trim().to_string();
+        let mut players = c.friends.clone();
+        for player in self.servers.value(Field::Players).split([',', ' ']) {
+            if !player.is_empty() && !players.iter().any(|name| name.eq_ignore_ascii_case(player)) {
+                players.push(player.to_string());
+            }
+        }
+        let spec = NewServer {
+            name,
+            world: World::New { seed: String::new() },
+            game_mode: c.mode.into(),
+            difficulty: c.difficulty.into(),
+            max_players: c.max_players,
+            friends_only: c.friends_only,
+            check_accounts: c.check_accounts,
+            players,
+            eula: true,
+        };
+        if spec.name.is_empty() {
+            self.servers.problem = Some(Problem::plain("Please enter a server name."));
+            return;
+        }
+        let tx = self.servers.tx.clone();
+        self.servers.creating = true;
+        self.servers.problem = None;
+        self.servers.job_log.clear();
+        std::thread::spawn(move || {
+            let lines = tx.clone();
+            let log = move |line: String| { let _ = lines.send(Event::Line(line)); };
+            let result = if servers::java::is_java(&dir) {
+                let software = servers::java::Software::parse(software)
+                    .ok_or_else(|| Problem::plain("Unsupported Java server software."));
+                software.and_then(|software| {
+                    servers::java::edit_existing(&dir, &spec, software, &version, ram, addons, &log)?;
+                    servers::rename(&dir, &spec.name).map_err(Problem::plain)
+                })
+            } else {
+                let updates = [
+                    ("server.motd", spec.name.clone()),
+                    ("world.game_mode", spec.game_mode.clone()),
+                    ("world.difficulty", spec.difficulty.clone()),
+                    ("server.max_players", spec.max_players.to_string()),
+                    ("server.whitelist", spec.friends_only.to_string()),
+                    ("server.online_mode", spec.check_accounts.to_string()),
+                ];
+                servers::set_config(&dir, &updates).and_then(|_| {
+                    servers::rename(&dir, &spec.name).map_err(Problem::plain)
+                })
+            };
+            let _ = tx.send(Event::Edited(result));
+        });
+    }
+
     fn create_server(&mut self) {
+        if self.servers.create.as_ref().is_some_and(|c| c.editing.is_some()) {
+            self.save_existing_server();
+            return;
+        }
         if self.servers.creating {
             return;
         }
