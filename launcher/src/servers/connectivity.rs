@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{atomic::{AtomicU64, Ordering}, LazyLock, Mutex},
@@ -34,6 +34,12 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static CONNECTIONS: LazyLock<Mutex<HashMap<PathBuf, (u64, Connection)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static AGENT: LazyLock<Mutex<Option<Child>>> = LazyLock::new(|| Mutex::new(None));
+static CLAIM_URL: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+
+/// This code is only a public one-time approval URL, never the agent secret.
+pub fn claim_url() -> Option<String> {
+    CLAIM_URL.lock().ok()?.clone()
+}
 
 pub fn current(dir: &Path) -> Option<Connection> {
     CONNECTIONS.lock().ok()?.get(dir).map(|(_, state)| state.clone())
@@ -148,13 +154,29 @@ fn ensure_agent() -> Result<(), String> {
     }
     let binary = download_agent()?;
     let mut command = Command::new(binary);
-    command.arg("-s").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    command.arg("-s").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    let child = command.spawn().map_err(|e| format!("Could not start Playit.gg: {e}"))?;
+    let mut child = command.spawn().map_err(|e| format!("Could not start Playit.gg: {e}"))?;
+    if let Ok(mut link) = CLAIM_URL.lock() { *link = None; }
+    if let Some(stdout) = child.stdout.take() {
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(start) = line.find("https://playit.gg/claim/") {
+                    let rest = &line[start + "https://playit.gg/claim/".len()..];
+                    let code: String = rest.chars().take_while(char::is_ascii_hexdigit).collect();
+                    if code.len() == 10 {
+                        if let Ok(mut link) = CLAIM_URL.lock() {
+                            *link = Some(format!("https://playit.gg/claim/{code}"));
+                        }
+                    }
+                }
+            }
+        });
+    }
     *agent = Some(child);
     Ok(())
 }
