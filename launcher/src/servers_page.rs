@@ -120,6 +120,17 @@ const MODES: [(&str, &str); 3] = [
 
 const SOFTWARES: [(&str, &str); 5] = [("vanilla", "Vanilla"), ("paper", "Paper"), ("fabric", "Fabric"), ("forge", "Forge"), ("neoforge", "NeoForge")];
 
+/// Keep optional add-ons compatible when the player changes server software.
+fn choose_server_software(create: &mut Create, software: &'static str) {
+    create.software = software;
+    if software == "vanilla" {
+        create.voice_chat = false;
+    }
+    if software != "paper" {
+        create.geyser = false;
+    }
+}
+
 const DIFFICULTIES: [(&str, &str); 4] = [
     ("peaceful", "Peaceful"),
     ("easy", "Easy"),
@@ -3158,6 +3169,10 @@ impl Launcher {
         let c = self.servers.create.as_ref()?;
         let (new_world, copy, worlds) = (c.new_world, c.copy.clone(), c.worlds.clone());
         let (mode, difficulty, max_players) = (c.mode, c.difficulty, c.max_players);
+        let (software, ram_gb, voice_chat, geyser) =
+            (c.software, c.ram_gb, c.voice_chat, c.geyser);
+        let can_voice = software != "vanilla";
+        let can_geyser = software == "paper";
         let (friends_only, eula, eula_missing) = (c.friends_only, c.eula, c.eula_missing);
         let creating = self.servers.creating;
         let row = |label: &'static str, control: AnyElement| {
@@ -3180,6 +3195,13 @@ impl Launcher {
                 });
             }
         };
+        let software_control = segments(
+            "create-software",
+            &SOFTWARES,
+            software,
+            &t,
+            pick(choose_server_software),
+        );
         let world_kind = segments(
             "create-world",
             &[("new", "New world"), ("copy", "Copy one of my worlds")],
@@ -3287,6 +3309,103 @@ impl Launcher {
                     .child(max_players.to_string()),
             )
             .child(step("create-more", "+", 1, cx));
+        let ram_step = |id: &'static str, label: &'static str, delta: i8, cx: &mut Context<Self>| {
+            button(id, label, Kind::Secondary, &t)
+                .w(px(36.))
+                .px(px(0.))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if let Some(c) = &mut this.servers.create {
+                        c.ram_gb = (c.ram_gb as i16 + delta as i16).clamp(1, 16) as u8;
+                    }
+                    cx.notify();
+                }))
+        };
+        let memory = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(ram_step("create-ram-less", "−", -1, cx))
+            .child(
+                text(theme::UI)
+                    .w(px(64.))
+                    .flex()
+                    .justify_center()
+                    .text_color(t.ink)
+                    .child(format!("{ram_gb} GB")),
+            )
+            .child(ram_step("create-ram-more", "+", 1, cx));
+        let voice_toggle = checkbox("create-voice-chat", voice_chat && can_voice)
+            .when(!can_voice, |d| d.opacity(0.45))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                if let Some(c) = &mut this.servers.create {
+                    if c.software != "vanilla" {
+                        c.voice_chat = !c.voice_chat;
+                    }
+                }
+                cx.notify();
+            }));
+        let geyser_toggle = checkbox("create-geyser", geyser && can_geyser)
+            .when(!can_geyser, |d| d.opacity(0.45))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                if let Some(c) = &mut this.servers.create {
+                    if c.software == "paper" {
+                        c.geyser = !c.geyser;
+                    }
+                }
+                cx.notify();
+            }));
+        let voice_row = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(12.))
+            .p(px(12.))
+            .rounded(px(theme::RADIUS))
+            .bg(t.plate_soft)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(text(theme::UI).text_color(t.ink).child("Proximity voice chat"))
+                    .child(text(theme::CAPTION).text_color(t.muted).child(
+                        if can_voice {
+                            "Install Simple Voice Chat automatically. Players also need the client mod and UDP port 24454 reachable."
+                        } else {
+                            "Choose Paper, Fabric, Forge or NeoForge to enable voice chat."
+                        },
+                    )),
+            )
+            .child(voice_toggle);
+        let geyser_row = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(12.))
+            .p(px(12.))
+            .rounded(px(theme::RADIUS))
+            .bg(t.plate_soft)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(text(theme::UI).text_color(t.ink).child("Bedrock crossplay (Geyser)"))
+                    .child(text(theme::CAPTION).text_color(t.muted).child(
+                        if can_geyser {
+                            "Install Geyser and Floodgate automatically. Bedrock needs UDP port 19132 reachable."
+                        } else {
+                            "Automatic Geyser + Floodgate setup currently requires Paper."
+                        },
+                    )),
+            )
+            .child(geyser_toggle);
+        let optional_features = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(voice_row)
+            .child(geyser_row);
         let checkbox = |id: &'static str, on: bool| {
             div()
                 .id(id)
@@ -3356,6 +3475,13 @@ impl Launcher {
                 self.field(Field::Name, "My server", 400., cx)
                     .into_any_element(),
             ))
+            .child(row("Server software", div().flex().child(software_control).into_any_element()))
+            .child(row(
+                "Minecraft version",
+                self.field(Field::JavaVersion, "26.3", 400., cx).into_any_element(),
+            ))
+            .child(row("Maximum RAM", memory.into_any_element()))
+            .child(row("Optional features", optional_features.into_any_element()))
             .child(row(
                 "World",
                 div()
