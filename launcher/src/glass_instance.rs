@@ -404,55 +404,38 @@ impl Launcher {
         // One made in the launcher can switch what it plays; the game's home and modpacks
         // play what they were made with.
         let switches = editing.is_none_or(|i| i.kind == instances::Kind::Own);
-        let kinds = [NewKind::Horizon];
-        let names: Vec<&str> = loaders().iter().map(|l| l.name()).collect();
-        let modded = match names.split_last() {
-            Some((last, [])) => last.to_string(),
-            Some((last, rest)) => trf(
-                "{first} or {last}",
-                &[("first", &rest.join(", ")), ("last", last)],
-            ),
-            None => String::new(),
-        };
+        // Every game type is a first-class choice. Existing Java and Rust
+        // instances keep their own saved runtime; we do not mix their mods.
+        let software = [
+            ("fabric", "Fabric", "Java Edition · Modrinth Fabric mods", NewKind::Modded, Some(Loader::Fabric)),
+            ("forge", "Forge", "Java Edition · Modrinth Forge mods", NewKind::Modded, Some(Loader::Forge)),
+            ("neoforge", "NeoForge", "Java Edition · Modrinth NeoForge mods", NewKind::Modded, Some(Loader::NeoForge)),
+            ("vanilla", "Vanilla", "Unmodified Java Edition · No mod loader", NewKind::Vanilla, None),
+            ("rust", "Rust", "Valtic native engine · Rust mods only", NewKind::Horizon, None),
+        ];
         let mut cards = Vec::new();
-        for k in kinds {
-            let (id, title, note) = match k {
-                NewKind::Horizon => (
-                    "horizon",
-                    tr("Valtic"),
-                    tr("Minecraft rebuilt in Rust, with Valtic mods").to_string(),
-                ),
-                NewKind::Vanilla => (
-                    "vanilla",
-                    tr("Vanilla"),
-                    tr("Minecraft as Mojang ships it").to_string(),
-                ),
-                NewKind::Modded => ("modded", tr("Modded"), modded.clone()),
-            };
-            let tile = match k {
-                NewKind::Modded => div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .size(px(42.))
-                    .rounded(px(11.))
-                    .bg(white(fill::BUTTON))
-                    .child(ui::icon("puzzle", 21., white(0.85)))
-                    .into_any_element(),
-                _ => self.auto_mark(k, loader, 42.),
-            };
-            let card = choice(format!("new-kind-{id}"), k == kind, &t)
+        for (id, title, note, k, selected_loader) in software {
+            let selected = k == kind && (k != NewKind::Modded || selected_loader == Some(loader));
+            let mark = self.auto_mark(k, selected_loader.unwrap_or(loader), 42.);
+            let card = choice(format!("new-kind-{id}"), selected, &t)
                 .items_center()
                 .gap(px(14.))
                 .p(px(12.))
-                .child(tile)
+                .child(mark)
                 .child(choice_text(title, note));
             cards.push(if !switches {
-                card.cursor_default().when(k != kind, |c| c.opacity(0.5))
+                card.cursor_default().when(!selected, |c| c.opacity(0.5))
             } else {
                 card.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.pick_kind(k, cx);
+                    this.change(|j| {
+                        j.kind = k;
+                        if let Some(loader) = selected_loader {
+                            j.loader = loader;
+                        }
+                    });
+                    if k != NewKind::Horizon {
+                        this.load_versions(cx);
+                    }
                     cx.notify();
                 }))
             });
@@ -666,7 +649,14 @@ impl Launcher {
             self.load_versions(cx);
             body = body.child(self.minecraft_versions(cx));
             if kind == NewKind::Modded {
-                body = body.child(self.loader_choice(cx));
+                body = body.child(section(
+                    "Selected mod loader".into(),
+                    None,
+                    ui::card_note(format!(
+                        "{} mods are filtered for the selected Minecraft version. The latest compatible loader is installed automatically.",
+                        self.draft_loader().name()
+                    )),
+                ));
             }
         }
         let name = self
