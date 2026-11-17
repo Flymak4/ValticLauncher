@@ -117,7 +117,7 @@ pub fn add(entry: Entry) -> Result<(), String> {
 /// game data, whitelist, mods or backups.
 pub fn rename(dir: &Path, name: &str) -> Result<Entry, String> {
     let name = name.trim();
-    if name.is_empty() || name.len() > 100 || name.contains(['\n', '\r']) {
+    if name.is_empty() || name.len() > 100 || name.chars().any(|ch| ch == '\n' || ch == '\r') {
         return Err("Enter a server name of 1–100 characters without line breaks.".into());
     }
     let mut all = list();
