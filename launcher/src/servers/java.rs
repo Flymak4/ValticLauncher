@@ -14,13 +14,14 @@ use std::time::{Duration, Instant};
 
 const META: &str = "valtic-server.json";
 const MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
-const USER_AGENT: &str = "ValticLauncher/1.0 (Minecraft server manager)";
+const USER_AGENT: &str = "ValticLauncher/1.0 (https://valticsmp.vercel.app/launcher)";
 const MAX_FILE_BYTES: u64 = 300 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Software {
     Vanilla,
+    Paper,
     Fabric,
     Forge,
     Neoforge,
@@ -29,6 +30,7 @@ impl Software {
     pub fn label(self) -> &'static str {
         match self {
             Self::Vanilla => "Vanilla",
+            Self::Paper => "Paper",
             Self::Fabric => "Fabric",
             Self::Forge => "Forge",
             Self::Neoforge => "NeoForge",
@@ -37,6 +39,7 @@ impl Software {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "vanilla" => Some(Self::Vanilla),
+            "paper" => Some(Self::Paper),
             "fabric" => Some(Self::Fabric),
             "forge" => Some(Self::Forge),
             "neoforge" => Some(Self::Neoforge),
@@ -73,7 +76,7 @@ pub fn metadata(dir: &Path) -> Result<Metadata, String> {
     let data = fs::read_to_string(dir.join(META)).map_err(|e| e.to_string())?;
     serde_json::from_str(&data).map_err(|e| format!("Invalid server metadata: {e}"))
 }
-fn fetch_json(url: &str) -> Result<Value, String> {
+pub(super) fn fetch_json(url: &str) -> Result<Value, String> {
     ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(30))
         .build()
@@ -95,7 +98,7 @@ fn fetch_text(url: &str) -> Result<String, String> {
         .into_string()
         .map_err(|e| e.to_string())
 }
-fn download(url: &str, dest: &Path, sha1: Option<&str>) -> Result<(), String> {
+pub(super) fn download(url: &str, dest: &Path, sha1: Option<&str>) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("The server download must use HTTPS.".into());
     }
@@ -174,6 +177,40 @@ fn install(software: Software, version: &str, dir: &Path, log: &dyn Fn(String)) 
             }
             log(format!("Downloading official Minecraft {version} server"));
             download(url, &dir.join("server.jar"), server["sha1"].as_str())?;
+            Ok((Launch::Jar("server.jar".into()), None))
+        }
+        Software::Paper => {
+            // PaperMC v3 Fill download service. Only install a STABLE build for
+            // the *requested* Minecraft version; do not silently switch versions.
+            let builds = fetch_json(&format!(
+                "https://fill.papermc.io/v3/projects/paper/versions/{version}/builds"
+            ))?;
+            let stable = builds.as_array()
+                .and_then(|a| a.iter().find(|b| b["channel"] == "STABLE"))
+                .ok_or_else(|| format!("No stable Paper build for Minecraft {version}"))?;
+            let data = &stable["downloads"]["server:default"];
+            let url = data["url"].as_str().ok_or("Paper build has no download URL")?;
+            if !url.starts_with("https://fill-data.papermc.io/") {
+                return Err("Unexpected Paper download host.".into());
+            }
+            let checksum = data["checksums"]["sha256"].as_str()
+                .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+                .ok_or("Paper build checksum is missing or invalid")?;
+            log(format!("Downloading stable Paper server for Minecraft {version}"));
+            download(url, &dir.join("server.jar"), None)?;
+            // Verify the official SHA-256 before starting an untrusted jar.
+            use sha2::{Digest as _, Sha256};
+            let mut file = File::open(dir.join("server.jar")).map_err(|e| e.to_string())?;
+            let mut hash = Sha256::new();
+            let mut bytes = [0u8; 8192];
+            loop {
+                let len = file.read(&mut bytes).map_err(|e| e.to_string())?;
+                if len == 0 { break; }
+                hash.update(&bytes[..len]);
+            }
+            if format!("{:x}", hash.finalize()) != checksum.to_ascii_lowercase() {
+                return Err("Paper server checksum mismatch.".into());
+            }
             Ok((Launch::Jar("server.jar".into()), None))
         }
         Software::Fabric => {
@@ -302,7 +339,7 @@ fn provision_players(dir: &Path, spec: &NewServer) -> Result<(), String> {
     }
     Ok(())
 }
-pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, log: &dyn Fn(String)) -> Result<Entry, Problem> {
+pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, addons: super::addons::Addons, log: &dyn Fn(String)) -> Result<Entry, Problem> {
     if !spec.eula {
         return Err(Problem::plain("You must accept the Minecraft EULA to create a server."));
     }
@@ -317,6 +354,7 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, l
     let result = (|| -> Result<Entry, String> {
         let port = super::free_port(25565, &super::ports_taken());
         let (launch, loader_version) = install(software, version, &dir, log)?;
+        super::addons::install(&dir, software, version, addons, log)?;
         fs::write(dir.join("eula.txt"), "eula=true\n").map_err(|e| e.to_string())?;
         fs::write(dir.join("server.properties"), properties(spec, port)).map_err(|e| e.to_string())?;
         provision_players(&dir, spec)?;
