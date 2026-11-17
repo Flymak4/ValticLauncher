@@ -635,6 +635,19 @@ pub fn free_port(from: u16, taken: &[u16]) -> u16 {
         .unwrap_or(from)
 }
 
+/// A free UDP port for add-ons such as Simple Voice Chat and Geyser.
+pub fn free_udp_port(from: u16, taken: &[u16]) -> u16 {
+    let bind = if cfg!(test) || std::env::var_os("HORIZON_TEST_LOOPBACK").is_some_and(|v| v == "1")
+    {
+        "127.0.0.1"
+    } else {
+        "0.0.0.0"
+    };
+    (from..u16::MAX)
+        .find(|p| !taken.contains(p) && std::net::UdpSocket::bind((bind, *p)).is_ok())
+        .unwrap_or(from)
+}
+
 /// The ports the launcher's other servers use: their game port and their web panel.
 fn ports_taken() -> Vec<u16> {
     let mut out = Vec::new();
@@ -642,6 +655,7 @@ fn ports_taken() -> Vec<u16> {
         if java::is_java(&e.dir) {
             if let Ok(meta) = java::metadata(&e.dir) {
                 out.push(meta.port);
+                out.extend([meta.voice_port, meta.geyser_port].into_iter().filter(|p| *p > 0));
             }
             continue;
         }
