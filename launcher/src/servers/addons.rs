@@ -106,7 +106,7 @@ fn set_property(path: &Path, key: &str, value: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(path, format!("{}\\n", lines.join("\\n"))).map_err(|e| e.to_string())
+    fs::write(path, format!("{}\n", lines.join("\n"))).map_err(|e| e.to_string())
 }
 
 /// Keep Geyser's generated YAML intact while setting the three network values Valtic owns.
@@ -143,7 +143,7 @@ fn configure_geyser(path: &Path, port: u16) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(path, format!("{}\\n", lines.join("\\n"))).map_err(|e| e.to_string())
+    fs::write(path, format!("{}\n", lines.join("\n"))).map_err(|e| e.to_string())
 }
 
 /// Apply the public UDP endpoints before Java starts, so plugins bind to the ports
