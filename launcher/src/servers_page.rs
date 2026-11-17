@@ -3309,6 +3309,22 @@ impl Launcher {
                     .child(max_players.to_string()),
             )
             .child(step("create-more", "+", 1, cx));
+        let checkbox = |id: &'static str, on: bool| {
+            div()
+                .id(id)
+                .flex_none()
+                .size(px(18.))
+                .border_1()
+                .border_color(if on { t.accent } else { t.muted })
+                .bg(if on { t.accent } else { t.surface })
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(t.on_accent)
+                .text_size(px(12.))
+                .cursor_pointer()
+                .when(on, |d| d.child("✓"))
+        };
         let ram_step = |id: &'static str, label: &'static str, delta: i8, cx: &mut Context<Self>| {
             button(id, label, Kind::Secondary, &t)
                 .w(px(36.))
@@ -3406,22 +3422,6 @@ impl Launcher {
             .gap(px(8.))
             .child(voice_row)
             .child(geyser_row);
-        let checkbox = |id: &'static str, on: bool| {
-            div()
-                .id(id)
-                .flex_none()
-                .size(px(18.))
-                .border_1()
-                .border_color(if on { t.accent } else { t.muted })
-                .bg(if on { t.accent } else { t.surface })
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(t.on_accent)
-                .text_size(px(12.))
-                .cursor_pointer()
-                .when(on, |d| d.child("✓"))
-        };
         let eula_line = div()
             .flex()
             .items_center()
