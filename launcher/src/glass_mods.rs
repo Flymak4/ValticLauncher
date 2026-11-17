@@ -54,12 +54,24 @@ impl Launcher {
         let instance = self
             .selected_instance()
             .map_or_else(|| "Valtic".to_owned(), |i| i.name.clone());
-        let target_line = self.mods.java_for(self.mods.kind).map(|target| {
-            trf(
-                "Filtered for {game}. Incompatible downloads cannot be installed.",
-                &[("game", &target.describe(self.mods.kind))],
-            )
-        });
+        let target_line = if self.mods.kind == PackKind::Mod {
+            match self.mods.java.as_ref() {
+                Some(target) if target.loader.is_none() =>
+                    Some("Vanilla Minecraft does not load mods. Create a Fabric, Forge or NeoForge instance to browse compatible mods.".to_string()),
+                Some(target) => Some(format!(
+                    "Modrinth · {} mods for Minecraft {} only. Incompatible mods are hidden.",
+                    target.loader.as_deref().unwrap_or("Java"), target.minecraft,
+                )),
+                None => Some("Rust engine · Native Valtic Rust mods only. Java mods are hidden.".to_string()),
+            }
+        } else {
+            self.mods.java_for(self.mods.kind).map(|target| {
+                trf(
+                    "Filtered for {game}. Incompatible downloads cannot be installed.",
+                    &[("game", &target.describe(self.mods.kind))],
+                )
+            })
+        };
         let head = div()
             .flex()
             .flex_col()
@@ -205,7 +217,7 @@ impl Launcher {
                         })),
                 )
             })
-            .when(switches(self.mods.kind) && !java, |d| {
+            .when(switches(self.mods.kind) && !java && self.mods.kind != PackKind::Mod, |d| {
                 d.child(self.glass_source_switch(cx))
             })
             .child(self.mods_filters(cx))
