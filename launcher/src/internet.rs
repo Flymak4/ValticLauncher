@@ -560,10 +560,14 @@ impl Launcher {
             }
             Some(servers::connectivity::Connection::Checking) => panel
                 .child(ui::card_note(tr("Setting up Playit.gg and checking your public Java address. No separate app installation is needed."))),
-            Some(servers::connectivity::Connection::SetupRequired { reason }) => panel
-                .child(ui::card_note(reason))
-                .child(button("playit-account", "Open Playit.gg", Kind::Ghost, &t)
-                    .on_click(|_: &ClickEvent, _: &mut Window, cx: &mut App| cx.open_url("https://playit.gg/account/agents"))),
+            Some(servers::connectivity::Connection::SetupRequired { reason }) => {
+                let claim = servers::connectivity::claim_url();
+                let title = if claim.is_some() { "Approve Playit setup" } else { "Open Playit.gg" };
+                let url = claim.unwrap_or_else(|| "https://playit.gg/account/agents".into());
+                panel.child(ui::card_note(reason))
+                    .child(button("playit-account", title, Kind::Ghost, &t)
+                        .on_click(move |_: &ClickEvent, _: &mut Window, cx: &mut App| cx.open_url(&url)))
+            },
             state => {
                 let running = servers::java::is_running(&dir);
                 let panel = match state {
