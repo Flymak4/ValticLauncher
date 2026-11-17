@@ -900,9 +900,14 @@ impl Launcher {
         self.servers.restart_needed.clear();
         if servers::java::is_java(&dir) {
             self.server_job("Starting Java server", move |_log| {
+                let meta = servers::java::metadata(&dir).map_err(Problem::plain)?;
+                let tunnels = servers::connectivity::prepare(&dir).map_err(Problem::plain)?;
+                servers::addons::configure_network(
+                    &dir, meta.software, meta.voice_port,
+                    tunnels.voice_address.as_deref(), meta.geyser_port
+                ).map_err(Problem::plain)?;
                 let note = servers::java::start(&dir)?;
-                let port = servers::java::metadata(&dir).ok().map_or(25565, |m| m.port);
-                servers::connectivity::start(dir, port);
+                servers::connectivity::monitor(dir, tunnels);
                 Ok(note)
             });
             return;
@@ -956,9 +961,14 @@ impl Launcher {
                 servers::connectivity::stop(&dir);
                 for _ in 0..100 {
                     if !servers::java::is_running(&dir) {
+                        let meta = servers::java::metadata(&dir).map_err(Problem::plain)?;
+                        let tunnels = servers::connectivity::prepare(&dir).map_err(Problem::plain)?;
+                        servers::addons::configure_network(
+                            &dir, meta.software, meta.voice_port,
+                            tunnels.voice_address.as_deref(), meta.geyser_port
+                        ).map_err(Problem::plain)?;
                         let note = servers::java::start(&dir)?;
-                        let port = servers::java::metadata(&dir).ok().map_or(25565, |m| m.port);
-                        servers::connectivity::start(dir.clone(), port);
+                        servers::connectivity::monitor(dir.clone(), tunnels);
                         return Ok(note);
                     }
                     std::thread::sleep(Duration::from_millis(100));
