@@ -748,7 +748,7 @@ mod tests {
         };
         fs::write(dir.join(META), serde_json::to_vec(&meta).unwrap()).unwrap();
         fs::write(dir.join("server.properties"),
-            "server-port=25565\\nmax-players=10\\ngamemode=survival\\ndifficulty=normal\\nonline-mode=true\\nwhite-list=false\\n").unwrap();
+            "server-port=25565\nmax-players=10\ngamemode=survival\ndifficulty=normal\nonline-mode=true\nwhite-list=false\n").unwrap();
         let spec = NewServer {
             name: "Edited server".into(), max_players: 25,
             game_mode: "creative".into(), difficulty: "hard".into(),
