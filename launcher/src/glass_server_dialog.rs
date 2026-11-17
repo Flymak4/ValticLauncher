@@ -225,6 +225,9 @@ impl Launcher {
         let details = c.details.clone();
         let (mode, difficulty, max) = (c.mode, c.difficulty, c.max_players);
         let (software, ram_gb) = (c.software, c.ram_gb);
+        let (voice_chat, geyser) = (c.voice_chat, c.geyser);
+        let can_voice = software != "vanilla";
+        let can_geyser = software == "paper";
         // Copy the version choices before creating widgets that mutably borrow self.
         let release_options = c.versions.iter().take(7).cloned().collect::<Vec<_>>();
         let (friends_only, check, friends) = (c.friends_only, c.check_accounts, c.friends.clone());
@@ -561,6 +564,8 @@ impl Launcher {
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if let Some(c) = &mut this.servers.create {
                             c.software = id;
+                            if id == "vanilla" { c.voice_chat = false; }
+                            if id != "paper" { c.geyser = false; }
                         }
                         cx.notify();
                     }))
@@ -603,6 +608,40 @@ impl Launcher {
             );
         let memory = section("Maximum RAM".into(), None, ram_controls);
 
+        let voice_row = div()
+            .flex().items_start().justify_between().gap(px(20.))
+            .p(px(16.)).rounded(px(radius::POPOVER)).bg(white(0.04))
+            .when(!can_voice, |d| d.opacity(0.45))
+            .child(div().flex().flex_col().min_w_0()
+                .child(ui::text(15., FontWeight::SEMIBOLD, ink::FULL).child("Proximity voice chat"))
+                .child(ui::text(13., FontWeight::NORMAL, ink::QUIET).mt(px(4.)).line_height(px(19.5))
+                    .child(if can_voice {
+                        "Install Simple Voice Chat automatically. Friends need the client mod and a separate UDP connection (24454)."
+                    } else {
+                        "Requires Paper, Fabric, Forge or NeoForge. Vanilla does not load mods or plugins."
+                    })))
+            .child(ui::toggle("create-voice-chat", voice_chat && can_voice, self.look.accent, self.look.on_accent, &t)
+                .when(can_voice, |toggle| toggle.on_click(set(cx, |c| c.voice_chat = !c.voice_chat))));
+        let geyser_row = div()
+            .flex().items_start().justify_between().gap(px(20.))
+            .p(px(16.)).rounded(px(radius::POPOVER)).bg(white(0.04))
+            .when(!can_geyser, |d| d.opacity(0.45))
+            .child(div().flex().flex_col().min_w_0()
+                .child(ui::text(15., FontWeight::SEMIBOLD, ink::FULL).child("Bedrock crossplay (Geyser)"))
+                .child(ui::text(13., FontWeight::NORMAL, ink::QUIET).mt(px(4.)).line_height(px(19.5))
+                    .child(if can_geyser {
+                        "Install Geyser and Floodgate automatically. Bedrock needs its own reachable UDP port (19132)."
+                    } else {
+                        "Automatic Geyser + Floodgate setup is currently supported on Paper servers."
+                    })))
+            .child(ui::toggle("create-geyser", geyser && can_geyser, self.look.accent, self.look.on_accent, &t)
+                .when(can_geyser, |toggle| toggle.on_click(set(cx, |c| c.geyser = !c.geyser))));
+        let addons = section(
+            "Optional features".into(),
+            None,
+            div().flex().flex_col().gap(px(10.)).child(voice_row).child(geyser_row),
+        );
+
         let body = div()
             .id("create-body")
             .flex()
@@ -614,13 +653,14 @@ impl Launcher {
             .pb(px(32.))
             .overflow_y_scroll()
             .child(section(
-                tr("Name").into(),
+                tr("Server name").into(),
                 None,
                 self.field(Field::Name, "My server", 400., cx).w_full(),
             ))
             .child(loaders)
             .child(version)
             .child(memory)
+            .child(addons)
             .child(world)
             .child(section(tr("Game mode").into(), None, modes))
             .child(numbers)
