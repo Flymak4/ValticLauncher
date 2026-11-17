@@ -4875,6 +4875,28 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
+    fn older_horizon_installations_still_have_a_usable_game_executable() {
+        let dir = std::env::temp_dir().join(format!(
+            "valtic-legacy-game-{}", std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("horizon-client.exe");
+        fs::write(&legacy, b"older installed game").unwrap();
+        assert_eq!(game_executable_at(&dir), legacy);
+
+        let valtic = dir.join("valtic-client.exe");
+        fs::write(&valtic, b"new Valtic game").unwrap();
+        assert_eq!(
+            game_executable_at(&dir),
+            dir.join(CLIENT),
+            "an existing preferred executable should take precedence"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[cfg(windows)]
     fn failed_removal_stays_listed_and_can_be_retried() {
         use std::os::windows::fs::OpenOptionsExt;
         let versions =
