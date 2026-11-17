@@ -1277,17 +1277,36 @@ impl Launcher {
                     servers::rename(&dir, &spec.name).map_err(Problem::plain)
                 })
             } else {
-                let updates = [
-                    ("server.motd", spec.name.clone()),
-                    ("world.game_mode", spec.game_mode.clone()),
-                    ("world.difficulty", spec.difficulty.clone()),
-                    ("server.max_players", spec.max_players.to_string()),
-                    ("server.whitelist", spec.friends_only.to_string()),
-                    ("server.online_mode", spec.check_accounts.to_string()),
-                ];
-                servers::set_config(&dir, &updates).and_then(|_| {
-                    servers::rename(&dir, &spec.name).map_err(Problem::plain)
-                })
+                if spec.friends_only && spec.players.is_empty() {
+                    Err(Problem::plain(
+                        "Friends-only access needs at least one allowed player. Add a Minecraft username, or choose Anyone with the address.",
+                    ))
+                } else {
+                    let updates = [
+                        ("server.motd", spec.name.clone()),
+                        ("world.game_mode", spec.game_mode.clone()),
+                        ("world.difficulty", spec.difficulty.clone()),
+                        ("server.max_players", spec.max_players.to_string()),
+                        ("server.whitelist", spec.friends_only.to_string()),
+                        ("server.online_mode", spec.check_accounts.to_string()),
+                    ];
+                    servers::set_config(&dir, &updates).and_then(|_| {
+                        // Keep the existing operator list untouched while syncing
+                        // the allowed players from the edited setup screen.
+                        let before = servers::names(&dir, "whitelist.json");
+                        for name in &spec.players {
+                            if !before.iter().any(|old| old.eq_ignore_ascii_case(name)) {
+                                servers::run(&dir, &["whitelist", "add", name])?;
+                            }
+                        }
+                        for name in &before {
+                            if !spec.players.iter().any(|new| new.eq_ignore_ascii_case(name)) {
+                                servers::run(&dir, &["whitelist", "remove", name])?;
+                            }
+                        }
+                        servers::rename(&dir, &spec.name).map_err(Problem::plain)
+                    })
+                }
             };
             let _ = tx.send(Event::Edited(result));
         });
