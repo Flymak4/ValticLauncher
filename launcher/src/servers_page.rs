@@ -118,12 +118,19 @@ const MODES: [(&str, &str); 3] = [
     ("adventure", "Adventure"),
 ];
 
-const SOFTWARES: [(&str, &str); 5] = [("vanilla", "Vanilla"), ("paper", "Paper"), ("fabric", "Fabric"), ("forge", "Forge"), ("neoforge", "NeoForge")];
+const SOFTWARES: [(&str, &str); 6] = [
+    ("vanilla", "Vanilla"),
+    ("paper", "Paper"),
+    ("fabric", "Fabric"),
+    ("forge", "Forge"),
+    ("neoforge", "NeoForge"),
+    ("rust", "Rust ★"),
+];
 
 /// Keep optional add-ons compatible when the player changes server software.
 fn choose_server_software(create: &mut Create, software: &'static str) {
     create.software = software;
-    if software == "vanilla" {
+    if software == "vanilla" || software == "rust" {
         create.voice_chat = false;
     }
     if software != "paper" {
@@ -1150,6 +1157,8 @@ impl Launcher {
             players,
             eula: c.eula,
         };
+        let native_rust = c.software == "rust";
+        let native_tag = if native_rust { self.selected().cloned() } else { None };
         let software = servers::java::Software::parse(c.software).unwrap_or(servers::java::Software::Vanilla);
         let minecraft_version = self.servers.value(Field::JavaVersion).trim().to_string();
         let ram_gb = c.ram_gb;
@@ -1163,7 +1172,14 @@ impl Launcher {
             let log = move |l: String| {
                 let _ = lines.send(Event::Line(l));
             };
-            let _ = tx.send(Event::Created(servers::java::create(&spec, software, &minecraft_version, ram_gb, addons, &log)));
+            // The recommended Rust option uses the existing Horizon server manager,
+            // not a Java jar or mod loader.
+            let result = if native_rust {
+                servers::create(&spec, native_tag.as_deref(), &log)
+            } else {
+                servers::java::create(&spec, software, &minecraft_version, ram_gb, addons, &log)
+            };
+            let _ = tx.send(Event::Created(result));
         });
     }
 
@@ -3185,7 +3201,7 @@ impl Launcher {
         let (mode, difficulty, max_players) = (c.mode, c.difficulty, c.max_players);
         let (software, ram_gb, voice_chat, geyser) =
             (c.software, c.ram_gb, c.voice_chat, c.geyser);
-        let can_voice = software != "vanilla";
+        let can_voice = software != "vanilla" && software != "rust";
         let can_geyser = software == "paper";
         let (friends_only, eula, eula_missing) = (c.friends_only, c.eula, c.eula_missing);
         let creating = self.servers.creating;
@@ -3368,7 +3384,7 @@ impl Launcher {
             .when(!can_voice, |d| d.opacity(0.45))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 if let Some(c) = &mut this.servers.create {
-                    if c.software != "vanilla" {
+                    if c.software != "vanilla" && c.software != "rust" {
                         c.voice_chat = !c.voice_chat;
                     }
                 }
@@ -3492,9 +3508,21 @@ impl Launcher {
             .child(row("Server software", div().flex().child(software_control).into_any_element()))
             .child(row(
                 "Minecraft version",
-                self.field(Field::JavaVersion, "26.3", 400., cx).into_any_element(),
+                if software == "rust" {
+                    text(theme::UI).text_color(t.ink)
+                        .child("26.3 · Horizon Rust (recommended)")
+                        .into_any_element()
+                } else {
+                    self.field(Field::JavaVersion, "26.3", 400., cx).into_any_element()
+                },
             ))
-            .child(row("Maximum RAM", memory.into_any_element()))
+            .when(software != "rust", |d| d.child(row("Maximum RAM", memory.into_any_element())))
+            .when(software == "rust", |d| d.child(row(
+                "Memory",
+                text(theme::CAPTION).text_color(t.muted)
+                    .child("Native Rust server: no Java runtime or JVM RAM limit. Requires a prepared Valtic 26.3 installation.")
+                    .into_any_element(),
+            )))
             .child(row("Optional features", optional_features.into_any_element()))
             .child(row(
                 "World",
