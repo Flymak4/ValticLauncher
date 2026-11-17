@@ -794,7 +794,19 @@ pub fn create(spec: &NewServer, tag: Option<&str>, log: &dyn Fn(String)) -> Resu
     let init = init_args(spec, &world, port);
     log("Writing the server's settings".into());
     run(&dir, &init.iter().map(String::as_str).collect::<Vec<_>>()).map_err(undo)?;
-    let settings = settings_args(spec, panel);
+    let mut settings = settings_args(spec, panel);
+    // Windows Valtic builds name the native game valtic-client.exe, rather than
+    // horizon-client.exe. Tell the Horizon server supervisor which executable
+    // to start so the Rust server runs our actual Valtic game build.
+    if cfg!(windows) {
+        let client = runtime_root().join("current").join("valtic-client.exe");
+        if !client.is_file() {
+            return Err(undo(Problem::plain(
+                "The Valtic Rust game executable is missing. Install and prepare the newest Valtic 26.3 version first.",
+            )));
+        }
+        settings.push(format!("engine.path={}", client.to_string_lossy()));
+    }
     run(
         &dir,
         &settings.iter().map(String::as_str).collect::<Vec<_>>(),
