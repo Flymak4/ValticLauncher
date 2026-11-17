@@ -845,10 +845,14 @@ impl Launcher {
             }
             Event::JavaVersions(result) => {
                 if let Some(create) = &mut s.create {
-                    match result {
-                        Ok(versions) => create.versions = versions,
-                        Err(e) => s.problem = Some(Problem::plain(format!("Couldn't load Minecraft versions: {e}"))),
+                    if create.editing.is_none() {
+                        match result {
+                            Ok(versions) => create.versions = versions,
+                            Err(e) => s.problem = Some(Problem::plain(format!("Couldn't load Minecraft versions: {e}"))),
+                        }
                     }
+                    // Editing does not need to reach Mojang for version choices:
+                    // software and version are fixed for this existing world.
                     true
                 } else {
                     false
