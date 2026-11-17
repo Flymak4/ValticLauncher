@@ -726,10 +726,46 @@ mod tests {
         let m = Metadata {
             software: Software::Fabric, minecraft_version: "1.21.1".into(),
             loader_version: None, ram_gb: 4, port: 25565,
+            voice_chat: false, geyser: false, voice_port: 0, geyser_port: 0,
             launch: Launch::Jar("server.jar".into()),
         };
         assert_eq!(launch_args(&m), ["-Xms1G", "-Xmx4G", "-jar", "server.jar", "nogui"]);
     }
+    #[test]
+    fn editing_existing_paper_server_keeps_the_world_and_changes_its_settings() {
+        let dir = std::env::temp_dir().join(format!(
+            "valtic-java-edit-test-{}", std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("world")).unwrap();
+        fs::write(dir.join("world/level.dat"), b"existing world").unwrap();
+        let meta = Metadata {
+            software: Software::Paper,
+            minecraft_version: "26.3".into(),
+            loader_version: None, ram_gb: 4, port: 25565,
+            voice_chat: false, geyser: false, voice_port: 0, geyser_port: 0,
+            launch: Launch::Jar("server.jar".into()),
+        };
+        fs::write(dir.join(META), serde_json::to_vec(&meta).unwrap()).unwrap();
+        fs::write(dir.join("server.properties"),
+            "server-port=25565\\nmax-players=10\\ngamemode=survival\\ndifficulty=normal\\nonline-mode=true\\nwhite-list=false\\n").unwrap();
+        let spec = NewServer {
+            name: "Edited server".into(), max_players: 25,
+            game_mode: "creative".into(), difficulty: "hard".into(),
+            friends_only: false, check_accounts: true,
+            ..NewServer::default()
+        };
+        let addons = super::super::addons::Addons::default();
+        edit_existing(&dir, &spec, Software::Paper, "26.3", 7, addons, &|_| {}).unwrap();
+        assert_eq!(fs::read(dir.join("world/level.dat")).unwrap(), b"existing world");
+        assert_eq!(metadata(&dir).unwrap().ram_gb, 7);
+        let text = fs::read_to_string(dir.join("server.properties")).unwrap();
+        assert!(text.contains("max-players=25"));
+        assert!(text.contains("gamemode=creative"));
+        assert!(text.contains("difficulty=hard"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn metadata_marker_protects_legacy_worlds() {
         let dir = std::env::temp_dir().join(format!("valtic-java-test-{}", std::process::id()));
