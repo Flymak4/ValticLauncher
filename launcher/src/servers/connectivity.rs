@@ -26,7 +26,13 @@ const MAX_AGENT_SIZE: u64 = 40 * 1024 * 1024;
 pub enum Connection {
     Checking,
     SetupRequired { reason: String },
-    Public { address: String },
+    Public {
+        address: String,
+        voice_address: Option<String>,
+        geyser_address: Option<String>,
+        voice_verified: bool,
+        geyser_verified: bool,
+    },
     Unavailable { reason: String },
 }
 
@@ -205,105 +211,296 @@ fn request(secret: &str, endpoint: &str, data: Value) -> Result<Value, String> {
     Ok(result["data"].clone())
 }
 
-/// Match on local port, not on the first tunnel in the account. Display only
-/// the address Playit actually assigns, never a made-up example hostname.
-fn find_tunnel(data: &Value, port: u16) -> Option<String> {
-    let tunnels = data["tunnels"].as_array()?;
-    tunnels.iter().find_map(|tunnel| {
-        if tunnel["disabled_reason"].is_string() || tunnel["port_type"] == "udp" {
+/// The public endpoints allocated to one server by Playit.
+#[derive(Clone, Debug)]
+pub struct TunnelInfo {
+    pub java_address: String,
+    pub voice_address: Option<String>,
+    pub geyser_address: Option<String>,
+}
+
+fn server_tag(dir: &Path) -> String {
+    let raw = dir.file_name().and_then(|s| s.to_str()).unwrap_or("server");
+    let safe: String = raw.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .take(24).collect();
+    safe.trim_matches('-').to_string()
+}
+
+fn find_tunnel(data: &Value, name: &str, port: u16, port_type: &str) -> Option<String> {
+    data["tunnels"].as_array()?.iter().find_map(|tunnel| {
+        if tunnel["name"].as_str() != Some(name)
+            || tunnel["port_type"].as_str() != Some(port_type)
+            || tunnel["disabled_reason"].is_string()
+        {
             return None;
         }
         let fields = tunnel["agent_config"]["fields"].as_array()?;
         let configured = fields.iter().find_map(|field| {
-            (field["name"] == "local_port").then(|| field["value"].as_str()?.parse::<u16>().ok()).flatten()
+            (field["name"] == "local_port")
+                .then(|| field["value"].as_str()?.parse::<u16>().ok())
+                .flatten()
         });
-        // The agent defaults to 25565 when no port override is configured.
-        if configured.or((tunnels.len() == 1 && port == 25565).then_some(25565)) != Some(port) {
+        if configured != Some(port) {
             return None;
         }
-        tunnel["display_address"].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+        tunnel["display_address"].as_str()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
     })
 }
 
-fn ensure_tunnel(key: &str, port: u16) -> Result<Option<String>, String> {
-    let data = request(key, "/v1/agents/rundata", json!({}))?;
-    if let Some(address) = find_tunnel(&data, port) {
-        return Ok(Some(address));
-    }
-    let title = format!("Valtic {port}");
-    let tunnels = request(key, "/v1/tunnels/list", json!({}))?;
-    let exists = tunnels["tunnels"].as_array().is_some_and(|all| all.iter().any(|t| {
-        t["name"] == title && t["tunnel_type"] == "minecraft-java"
-    }));
-    if !exists {
-        request(key, "/v1/tunnels/create", json!({
-            "name": title,
-            "protocol": { "type": "tunnel-type", "details": "minecraft-java" },
-            "origin": { "type": "agent", "data": {
-                "agent_id": data["agent_id"], "config": { "fields": [
-                    { "name": "local_ip", "value": "127.0.0.1" },
-                    { "name": "local_port", "value": port.to_string() }
-                ] }
-            } },
-            "endpoint": { "type": "region", "details": { "region": "global", "port": null } },
-            "enabled": true, "firewall_id": null
-        }))?;
-    }
-    Ok(None)
+fn account_has_tunnel(data: &Value, name: &str, port_type: &str) -> bool {
+    data["tunnels"].as_array().is_some_and(|tunnels| tunnels.iter().any(|tunnel| {
+        tunnel["name"].as_str() == Some(name)
+            && tunnel["port_type"].as_str() == Some(port_type)
+    }))
 }
 
-pub fn start(dir: PathBuf, port: u16) {
+fn create_tunnel(
+    key: &str,
+    agent_id: &Value,
+    name: &str,
+    port: u16,
+    port_type: &str,
+    protocol: Value,
+) -> Result<(), String> {
+    request(key, "/v1/tunnels/create", json!({
+        "name": name,
+        "protocol": protocol,
+        "origin": { "type": "agent", "data": {
+            "agent_id": agent_id,
+            "config": { "fields": [
+                { "name": "local_ip", "value": "127.0.0.1" },
+                { "name": "local_port", "value": port.to_string() }
+            ] }
+        } },
+        "endpoint": { "type": "region", "details": { "region": "global", "port": null } },
+        "enabled": true,
+        "firewall_id": null
+    }))?;
+    let _ = port_type;
+    Ok(())
+}
+
+fn ensure_java_tunnel(key: &str, run_data: &Value, dir: &Path, port: u16) -> Result<(), String> {
+    let name = format!("Valtic {} Java", server_tag(dir));
+    if find_tunnel(run_data, &name, port, "tcp").is_some() {
+        return Ok(());
+    }
+    let tunnels = request(key, "/v1/tunnels/list", json!({}))?;
+    if account_has_tunnel(&tunnels, &name, "tcp") {
+        return Ok(());
+    }
+    create_tunnel(
+        key, &run_data["agent_id"], &name, port, "tcp",
+        json!({ "type": "tunnel-type", "details": "minecraft-java" }),
+    )
+}
+
+fn ensure_udp_tunnel(
+    key: &str,
+    run_data: &Value,
+    dir: &Path,
+    port: u16,
+    suffix: &str,
+    description: &str,
+) -> Result<(), String> {
+    let name = format!("Valtic {} {suffix}", server_tag(dir));
+    if find_tunnel(run_data, &name, port, "udp").is_some() {
+        return Ok(());
+    }
+    let tunnels = request(key, "/v1/tunnels/list", json!({}))?;
+    if account_has_tunnel(&tunnels, &name, "udp") {
+        return Ok(());
+    }
+    create_tunnel(
+        key, &run_data["agent_id"], &name, port, "udp",
+        json!({
+            "type": "raw-ports",
+            "details": {
+                "port_type": "udp",
+                "port_count": 1,
+                "software_description": description
+            }
+        }),
+    )
+}
+
+/// Creates the Java and optional UDP tunnels before the game process starts. If this is the
+/// first run, the player approves the Playit agent once in their browser, then presses Start again.
+pub fn prepare(dir: &Path) -> Result<TunnelInfo, String> {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     if let Ok(mut all) = CONNECTIONS.lock() {
-        all.insert(dir.clone(), (id, Connection::Checking));
-    } else { return; }
-    thread::spawn(move || {
-        if let Err(reason) = ensure_agent() {
-            let _ = set(&dir, id, Connection::Unavailable { reason });
-            return;
+        all.insert(dir.to_path_buf(), (id, Connection::Checking));
+    } else {
+        return Err("Playit connection state is unavailable.".into());
+    }
+
+    let result = (|| -> Result<TunnelInfo, String> {
+        ensure_agent()?;
+        let Some(key) = secret() else {
+            let reason = "Approve the Playit.gg agent in the browser. This is required once per computer; after approval, press Start again.".to_string();
+            let _ = set(dir, id, Connection::SetupRequired { reason: reason.clone() });
+            return Err(reason);
+        };
+        let meta = super::java::metadata(dir)?;
+        let initial = request(&key, "/v1/agents/rundata", json!({}))?;
+        ensure_java_tunnel(&key, &initial, dir, meta.port)?;
+        if meta.voice_chat {
+            ensure_udp_tunnel(&key, &initial, dir, meta.voice_port, "Voice", "Valtic Simple Voice Chat UDP")?;
         }
-        let mut created = false;
-        let mut failures = 0u8;
+        if meta.geyser {
+            ensure_udp_tunnel(&key, &initial, dir, meta.geyser_port, "Bedrock", "Valtic Geyser Bedrock UDP")?;
+        }
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(45);
+        loop {
+            if !agent_running() {
+                return Err("The Playit agent stopped while setting up tunnels.".into());
+            }
+            let data = request(&key, "/v1/agents/rundata", json!({}))?;
+            let java_address = find_tunnel(
+                &data, &format!("Valtic {} Java", server_tag(dir)), meta.port, "tcp"
+            );
+            let voice_address = if meta.voice_chat {
+                find_tunnel(&data, &format!("Valtic {} Voice", server_tag(dir)), meta.voice_port, "udp")
+            } else { None };
+            let geyser_address = if meta.geyser {
+                find_tunnel(&data, &format!("Valtic {} Bedrock", server_tag(dir)), meta.geyser_port, "udp")
+            } else { None };
+
+            if let Some(java_address) = java_address {
+                if (!meta.voice_chat || voice_address.is_some())
+                    && (!meta.geyser || geyser_address.is_some())
+                {
+                    return Ok(TunnelInfo { java_address, voice_address, geyser_address });
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("Playit created the tunnel, but it has not become active yet. Check your Playit account and retry.".into());
+            }
+            thread::sleep(Duration::from_secs(2));
+        }
+    })();
+
+    match &result {
+        Ok(info) => {
+            let _ = set(dir, id, Connection::Public {
+                address: info.java_address.clone(),
+                voice_address: info.voice_address.clone(),
+                geyser_address: info.geyser_address.clone(),
+                voice_verified: false,
+                geyser_verified: false,
+            });
+        }
+        Err(reason) => {
+            if !matches!(current(dir), Some(Connection::SetupRequired { .. })) {
+                let _ = set(dir, id, Connection::Unavailable { reason: reason.clone() });
+            }
+        }
+    }
+    result
+}
+
+/// Polls the live agent and checks the installed config plus the plugin's startup log. A green
+/// tick is shown only after both the public UDP tunnel and the server-side service are confirmed.
+pub fn monitor(dir: PathBuf, info: TunnelInfo) {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut all) = CONNECTIONS.lock() {
+        all.insert(dir.clone(), (id, Connection::Public {
+            address: info.java_address.clone(),
+            voice_address: info.voice_address.clone(),
+            geyser_address: info.geyser_address.clone(),
+            voice_verified: false,
+            geyser_verified: false,
+        }));
+    } else {
+        return;
+    }
+
+    thread::spawn(move || {
         while current_job(&dir, id) && super::java::is_running(&dir) {
             if !agent_running() {
                 let _ = set(&dir, id, Connection::Unavailable {
-                    reason: "Playit stopped unexpectedly. Press Retry to restart it.".into()
+                    reason: "Playit stopped unexpectedly. Press Retry Playit to reconnect.".into()
                 });
                 return;
             }
             let Some(key) = secret() else {
                 let _ = set(&dir, id, Connection::SetupRequired {
-                    reason: "Approve the Playit.gg agent in the browser window opened by Valtic. This is required once per computer.".into()
+                    reason: "The Playit agent needs approval in your browser.".into()
                 });
-                thread::sleep(Duration::from_secs(2));
+                thread::sleep(Duration::from_secs(3));
                 continue;
             };
-            if !created { let _ = set(&dir, id, Connection::Checking); }
-            let result = if !created { ensure_tunnel(&key, port) }
-                else { request(&key, "/v1/agents/rundata", json!({}))
-                    .map(|d| find_tunnel(&d, port)) };
-            match result {
-                Ok(Some(address)) => {
-                    let _ = set(&dir, id, Connection::Public { address });
-                    failures = 0;
-                    created = true;
-                }
-                Ok(None) => {
-                    created = true;
-                    let _ = set(&dir, id, Connection::Checking);
-                    failures = 0;
-                }
+            let meta = match super::java::metadata(&dir) {
+                Ok(meta) => meta,
                 Err(reason) => {
-                    failures = failures.saturating_add(1);
-                    if failures > 3 {
-                        let _ = set(&dir, id, Connection::Unavailable {
-                            reason: format!("{reason}. Check your Playit account or press Retry.")
-                        });
-                        return;
-                    }
+                    let _ = set(&dir, id, Connection::Unavailable { reason });
+                    return;
                 }
+            };
+            let data = match request(&key, "/v1/agents/rundata", json!({})) {
+                Ok(data) => data,
+                Err(_) => {
+                    thread::sleep(Duration::from_secs(5));
+                    continue;
+                }
+            };
+            let java_ok = find_tunnel(
+                &data, &format!("Valtic {} Java", server_tag(&dir)), meta.port, "tcp"
+            ).is_some();
+            let voice_tunnel_ok = !meta.voice_chat || find_tunnel(
+                &data, &format!("Valtic {} Voice", server_tag(&dir)), meta.voice_port, "udp"
+            ).is_some();
+            let geyser_tunnel_ok = !meta.geyser || find_tunnel(
+                &data, &format!("Valtic {} Bedrock", server_tag(&dir)), meta.geyser_port, "udp"
+            ).is_some();
+            let log = fs::read_to_string(dir.join("logs/valtic-console.log")).unwrap_or_default();
+            let (voice_config_ok, geyser_config_ok) = super::addons::network_config_matches(
+                &dir, meta.software, meta.voice_port, info.voice_address.as_deref(), meta.geyser_port
+            );
+            let voice_loaded = log.contains("Voice chat server started");
+            let geyser_loaded = log.contains("Geyser-Spigot")
+                && (log.contains("Done (") || log.contains("Enabled"));
+            let voice_verified = meta.voice_chat
+                && voice_tunnel_ok && voice_config_ok && voice_loaded;
+            let geyser_verified = meta.geyser
+                && geyser_tunnel_ok && geyser_config_ok && geyser_loaded;
+
+            if !java_ok {
+                let _ = set(&dir, id, Connection::Unavailable {
+                    reason: "The Playit Java tunnel is not active.".into()
+                });
+                return;
             }
+            let _ = set(&dir, id, Connection::Public {
+                address: info.java_address.clone(),
+                voice_address: info.voice_address.clone(),
+                geyser_address: info.geyser_address.clone(),
+                voice_verified,
+                geyser_verified,
+            });
             thread::sleep(Duration::from_secs(5));
+        }
+    });
+}
+
+/// Retry Playit setup for a running Java server.
+pub fn start(dir: PathBuf, _port: u16) {
+    thread::spawn(move || {
+        match prepare(&dir) {
+            Ok(info) => {
+                if let Ok(meta) = super::java::metadata(&dir) {
+                    let _ = super::addons::configure_network(
+                        &dir, meta.software, meta.voice_port,
+                        info.voice_address.as_deref(), meta.geyser_port
+                    );
+                }
+                monitor(dir, info);
+            }
+            Err(_) => {}
         }
     });
 }
@@ -312,12 +509,15 @@ pub fn start(dir: PathBuf, port: u16) {
 mod tests {
     use super::*;
     #[test]
-    fn no_address_without_a_real_matching_port() {
+    fn finds_only_the_requested_tunnel_and_protocol() {
         let data = json!({"tunnels":[
-            {"port_type":"tcp","display_address":"example.playit.gg",
-             "disabled_reason":null,"agent_config":{"fields":[{"name":"local_port","value":"25566"}]}}
+            {"name":"Valtic test Java","port_type":"tcp","display_address":"java.example:25565",
+             "disabled_reason":null,"agent_config":{"fields":[{"name":"local_port","value":"25565"}]}},
+            {"name":"Valtic test Voice","port_type":"udp","display_address":"voice.example:30111",
+             "disabled_reason":null,"agent_config":{"fields":[{"name":"local_port","value":"24454"}]}}
         ]});
-        assert_eq!(find_tunnel(&data, 25565), None);
-        assert_eq!(find_tunnel(&data, 25566).as_deref(), Some("example.playit.gg"));
+        assert_eq!(find_tunnel(&data, "Valtic test Java", 25565, "tcp").as_deref(), Some("java.example:25565"));
+        assert_eq!(find_tunnel(&data, "Valtic test Voice", 24454, "udp").as_deref(), Some("voice.example:30111"));
+        assert_eq!(find_tunnel(&data, "Valtic test Voice", 24454, "tcp"), None);
     }
 }
