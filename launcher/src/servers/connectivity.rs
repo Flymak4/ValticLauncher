@@ -63,6 +63,14 @@ fn set(dir: &Path, id: u64, value: Connection) -> bool {
     true
 }
 
+fn set_current(dir: &Path, value: Connection) {
+    if let Ok(mut entries) = CONNECTIONS.lock() {
+        if let Some((_, state)) = entries.get_mut(dir) {
+            *state = value;
+        }
+    }
+}
+
 pub fn stop(dir: &Path) {
     let empty = if let Ok(mut entries) = CONNECTIONS.lock() {
         entries.remove(dir);
@@ -499,7 +507,7 @@ pub fn start(dir: PathBuf, _port: u16) {
                 thread::sleep(Duration::from_millis(100));
             }
             if super::java::is_running(&dir) {
-                let _ = set(&dir, NEXT_ID.load(Ordering::Relaxed), Connection::Unavailable {
+                let _ = set_current(&dir, Connection::Unavailable {
                     reason: "The server did not stop in time to apply the new UDP tunnel settings. Stop it and retry.".into()
                 });
                 return;
@@ -509,12 +517,12 @@ pub fn start(dir: PathBuf, _port: u16) {
             &dir, meta.software, meta.voice_port,
             info.voice_address.as_deref(), meta.geyser_port
         ) {
-            let _ = set(&dir, NEXT_ID.load(Ordering::Relaxed), Connection::Unavailable { reason });
+            let _ = set_current(&dir, Connection::Unavailable { reason });
             return;
         }
         if !super::java::is_running(&dir) {
             if let Err(problem) = super::java::start(&dir) {
-                let _ = set(&dir, NEXT_ID.load(Ordering::Relaxed), Connection::Unavailable {
+                let _ = set_current(&dir, Connection::Unavailable {
                     reason: problem.message
                 });
                 return;
