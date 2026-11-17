@@ -403,6 +403,34 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, a
     }
     result.map_err(Problem::plain)
 }
+/// Install or repair Simple Voice Chat on an existing Paper server. The server
+/// must be stopped so the plugin files and metadata are consistent at startup.
+/// This is idempotent: pressing Setup again repairs an interrupted installation.
+pub fn enable_voice_chat(dir: &Path, log: &dyn Fn(String)) -> Result<(), Problem> {
+    let mut meta = metadata(dir).map_err(Problem::plain)?;
+    if meta.software != Software::Paper {
+        return Err(Problem::plain("One-click voice chat repair currently supports Paper servers."));
+    }
+    if is_running(dir) {
+        return Err(Problem::plain("Stop the Paper server before installing voice chat."));
+    }
+    super::addons::install(
+        dir, meta.software, &meta.minecraft_version,
+        super::addons::Addons { voice_chat: true, geyser: false }, log
+    ).map_err(Problem::plain)?;
+    if meta.voice_port == 0 {
+        let mut taken = super::ports_taken();
+        taken.push(meta.port);
+        meta.voice_port = super::free_udp_port(24454, &taken);
+    }
+    meta.voice_chat = true;
+    fs::write(dir.join(META), serde_json::to_vec_pretty(&meta)
+        .map_err(|e| Problem::plain(e.to_string()))?)
+        .map_err(|e| Problem::plain(e.to_string()))?;
+    log(format!("Simple Voice Chat installed and configured for UDP port {}.", meta.voice_port));
+    Ok(())
+}
+
 fn launch_args(meta: &Metadata) -> Vec<String> {
     let mut args = vec!["-Xms1G".to_string(), format!("-Xmx{}G", meta.ram_gb)];
     match &meta.launch {
