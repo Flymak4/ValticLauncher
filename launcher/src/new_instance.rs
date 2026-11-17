@@ -236,25 +236,36 @@ impl Launcher {
         .detach();
     }
 
-    /// The tabs over a new instance's dialog: Horizon, Vanilla, Modded.
+    /// Five independent game engines/loaders, with the modded choices bound
+    /// to their actual loader rather than a generic "Modded" selection.
     pub(super) fn kind_tabs(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let now = self.instances.dialog.as_ref().map(|d| d.java.kind);
-        div().flex().gap(px(4.)).children(
+        let now = self.instances.dialog.as_ref().map(|d| (d.java.kind, d.java.loader));
+        div().flex().flex_wrap().gap(px(4.)).children(
             [
-                (NewKind::Horizon, "Valtic"),
-                (NewKind::Vanilla, "Vanilla"),
-                (NewKind::Modded, "Modded"),
+                (NewKind::Modded, Some(Loader::Fabric), "Fabric"),
+                (NewKind::Modded, Some(Loader::Forge), "Forge"),
+                (NewKind::Modded, Some(Loader::NeoForge), "NeoForge"),
+                (NewKind::Vanilla, None, "Vanilla"),
+                (NewKind::Horizon, None, "Rust"),
             ]
-            .map(|(kind, label)| {
+            .map(|(kind, selected_loader, label)| {
                 shell::tab(
                     format!("new-kind-{label}"),
                     tr(label),
-                    now == Some(kind),
+                    now.is_some_and(|(current, loader)| {
+                        current == kind && (selected_loader.is_none() || selected_loader == Some(loader))
+                    }),
                     &t,
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.pick_kind(kind, cx);
+                    this.change(|j| {
+                        j.kind = kind;
+                        if let Some(loader) = selected_loader {
+                            j.loader = loader;
+                        }
+                    });
+                    if kind != NewKind::Horizon { this.load_versions(cx); }
                     cx.notify();
                 }))
             }),
@@ -420,7 +431,7 @@ impl Launcher {
                     .flex()
                     .flex_wrap()
                     .gap(px(10.))
-                    .children(Loader::ALL.map(card)),
+                    .children([Loader::Fabric, Loader::Forge, Loader::NeoForge].map(card)),
             );
             if let Some(mc) = chosen.clone() {
                 self.ask_loader_versions(&mc, cx);
