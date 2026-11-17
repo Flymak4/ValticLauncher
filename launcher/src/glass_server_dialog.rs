@@ -616,7 +616,7 @@ impl Launcher {
                 .child(ui::text(15., FontWeight::SEMIBOLD, ink::FULL).child("Proximity voice chat"))
                 .child(ui::text(13., FontWeight::NORMAL, ink::QUIET).mt(px(4.)).line_height(px(19.5))
                     .child(if can_voice {
-                        "Install Simple Voice Chat automatically. Friends need the client mod and a separate UDP connection (24454)."
+                        "Install Simple Voice Chat automatically and create its UDP tunnel. Friends need the matching client mod; Valtic shows them the connection address."
                     } else {
                         "Requires Paper, Fabric, Forge or NeoForge. Vanilla does not load mods or plugins."
                     })))
@@ -630,7 +630,7 @@ impl Launcher {
                 .child(ui::text(15., FontWeight::SEMIBOLD, ink::FULL).child("Bedrock crossplay (Geyser)"))
                 .child(ui::text(13., FontWeight::NORMAL, ink::QUIET).mt(px(4.)).line_height(px(19.5))
                     .child(if can_geyser {
-                        "Install Geyser and Floodgate automatically. Bedrock needs its own reachable UDP port (19132)."
+                        "Install and configure Geyser + Floodgate automatically, then create the Bedrock UDP tunnel. Valtic shows the Bedrock address when ready."
                     } else {
                         "Automatic Geyser + Floodgate setup is currently supported on Paper servers."
                     })))
