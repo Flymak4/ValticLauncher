@@ -398,6 +398,7 @@ pub(super) fn stop_on_quit() {
         }
         if servers::java::is_java(&dir) {
             let _ = servers::java::stop(&dir);
+            servers::connectivity::stop(&dir);
         } else if let Some(api) = servers::Api::open(&dir) {
             let _ = api.call("POST", "/api/v1/stop", None);
         }
@@ -414,6 +415,7 @@ pub(super) fn keep_running_through_update() {
     let mut started = STARTED_HERE.lock().unwrap();
     for dir in started.iter().filter(|d| servers::java::is_java(d)) {
         let _ = servers::java::stop(dir);
+        servers::connectivity::stop(dir);
     }
     started.clear();
 }
@@ -702,7 +704,7 @@ impl Launcher {
                         let is_java = servers::java::is_java(&entry.dir);
                         self.open_server(entry.dir.clone());
                         self.servers.note = Some(if is_java {
-                            format!("{} is installed. Press Start to host publicly using the free built-in Java relay. The assigned address will appear in the Servers panel.", entry.name)
+                            format!("{} is installed. Press Start to connect through Playit.gg. First-time users approve their account in the browser; Valtic installs the agent and creates the Java tunnel.", entry.name)
                         } else {
                             format!("{} is ready. Press Start, then give your friends the address below.", entry.name)
                         });
@@ -940,6 +942,7 @@ impl Launcher {
         if servers::java::is_java(&dir) {
             self.server_job("Restarting Java server", move |_log| {
                 servers::java::stop(&dir)?;
+                servers::connectivity::stop(&dir);
                 for _ in 0..100 {
                     if !servers::java::is_running(&dir) {
                         let note = servers::java::start(&dir)?;
@@ -2032,7 +2035,7 @@ impl Launcher {
             )))
             .child(text(theme::CAPTION).text_color(t.muted).child(
                 if self.servers.open.as_deref().is_some_and(servers::java::is_java) {
-                    tr("Friends elsewhere use the public Java address shown below once the free relay connects. They only need Minecraft: Java Edition.").to_string()
+                    tr("Friends elsewhere use the Playit.gg Java address shown below once its agent connects. They only need Minecraft: Java Edition.").to_string()
                 } else {
                     trf("Friends elsewhere can use Tailscale or forward TCP port {port} on your router.", &[("port", &port.to_string())])
                 },
