@@ -130,7 +130,11 @@ const SOFTWARES: [(&str, &str); 6] = [
 /// Keep optional add-ons compatible when the player changes server software.
 fn choose_server_software(create: &mut Create, software: &'static str) {
     create.software = software;
-    if software == "vanilla" || software == "rust" {
+    // Paper's one-click voice chat is enabled when selected. The optional
+    // toggle remains available if a player wants a server without voice.
+    if software == "paper" {
+        create.voice_chat = true;
+    } else if software == "vanilla" || software == "rust" {
         create.voice_chat = false;
     }
     if software != "paper" {
