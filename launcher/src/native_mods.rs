@@ -182,7 +182,7 @@ fn platform_for_game(base: &str) -> Result<BuildPlatform, String> {
     if std::env::consts::OS != "windows" {
         return Ok(BuildPlatform::default());
     }
-    let executable = backend::version_dir(base).join(backend::CLIENT);
+    let executable = backend::game_executable(base);
     let machine = pe_machine(&executable).map_err(|error| {
         trf(
             "Could not read {name}: {error}",
@@ -2422,13 +2422,20 @@ fn pipeline(
         })?;
         let out = target_dir.join(compiled.cargo().0);
         api::as_client(&stage, target, has_api, &out)?;
+        // Cargo compiles horizon-client.exe even when the installed Valtic
+        // game is named valtic-client.exe. Only the official-game package is
+        // explicitly copied to the Valtic name by as_client().
+        let compiled_binary = if api::game_package(&stage, target, has_api) == api::OFFICIAL {
+            out.join(backend::CLIENT)
+        } else {
+            out.join(format!("horizon-client{}", std::env::consts::EXE_SUFFIX))
+        };
         if let Some(expected) = platform.machine {
-            let executable = target_dir.join(compiled.cargo().0).join(backend::CLIENT);
-            let actual = pe_machine(&executable).map_err(|error| {
+            let actual = pe_machine(&compiled_binary).map_err(|error| {
                 trf(
                     "Could not read {name}: {error}",
                     &[
-                        ("name", &executable.display().to_string()),
+                        ("name", &compiled_binary.display().to_string()),
                         ("error", &error),
                     ],
                 )
@@ -2444,10 +2451,7 @@ fn pipeline(
         save_record(target, profile, platform.cache_key(), &now);
         // Out of `target_dir` before any post-build bin is built there (`post_build_programs`).
         let binary = real.join("programs").join(target.binary());
-        copy_out(
-            &target_dir.join(compiled.cargo().0).join(backend::CLIENT),
-            &binary,
-        )?;
+        copy_out(&compiled_binary, &binary)?;
         let post = post_build_programs(
             &rust,
             &stage,
@@ -2873,6 +2877,10 @@ fn carried_over(name: &std::ffi::OsStr, target: Target) -> bool {
     .map(|s| s.to_string())
     .collect();
     own.push(backend::CLIENT.to_string());
+    // An old Horizon executable must not be copied into a newly built Valtic
+    // version, since only the newly compiled binary contains its native mods.
+    own.push("horizon-client".to_string());
+    own.push("valtic-client".to_string());
     own.push(".installed".to_string());
     if target == Target::Server {
         own.push("horizon-engine".to_string());
