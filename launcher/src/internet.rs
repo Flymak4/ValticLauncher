@@ -602,9 +602,18 @@ impl Launcher {
                 let claim = servers::connectivity::claim_url();
                 let title = if claim.is_some() { "Approve Playit setup" } else { "Open Playit.gg" };
                 let url = claim.unwrap_or_else(|| "https://playit.gg/account/agents".into());
-                panel.child(ui::card_note(reason))
+                let mut setup = panel.child(ui::card_note(reason))
                     .child(button("playit-account", title, Kind::Ghost, &t)
-                        .on_click(move |_: &ClickEvent, _: &mut Window, cx: &mut App| cx.open_url(&url)))
+                        .on_click(move |_: &ClickEvent, _: &mut Window, cx: &mut App| cx.open_url(&url)));
+                if servers::java::is_running(&dir) {
+                    let target = dir.clone();
+                    setup = setup.child(button("playit-retry-approval", "Retry setup after approval", Kind::Secondary, &t)
+                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                            servers::connectivity::start(target.clone(), port);
+                            cx.notify();
+                        })));
+                }
+                setup
             },
             state => {
                 let running = servers::java::is_running(&dir);
