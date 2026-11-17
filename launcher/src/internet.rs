@@ -6,7 +6,6 @@ use super::servers_page::Field;
 use super::*;
 use horizon_launcher::servers;
 use horizon_launcher::tailscale::{self, Api, Invite, Reach, State};
-use std::path::PathBuf;
 use serde_json::Value;
 
 /// How often Tailscale's state is read while the panel shows.
@@ -41,7 +40,6 @@ pub(super) struct Internet {
     fresh: Option<Invite>,
     confirm_limit: bool,
     copied: Option<(String, Instant)>,
-    force_tailscale: Option<PathBuf>,
     tx: Sender<Event>,
     rx: Receiver<Event>,
 }
@@ -67,7 +65,6 @@ impl Internet {
             fresh: None,
             confirm_limit: false,
             copied: None,
-            force_tailscale: None,
             tx,
             rx,
         }
@@ -529,92 +526,68 @@ impl Launcher {
     /// The glass Servers page's invitations (not in the mockup), under the server's Players: once
     /// Tailscale runs, inviting a friend to this computer, then the Funnel note.
 
-    /// Direct public hosting when a router mapping succeeds; otherwise Tailscale.
+    /// Public Java hosting through a built-in TCP relay; no port mapping or Tailscale.
     pub(super) fn glass_java_internet(&mut self, port: u16, cx: &mut Context<Self>) -> Div {
         use crate::glass_ui as ui;
         use horizon_theme::glass::ink;
+
         let Some(dir) = self.servers.open.clone() else { return div() };
-        let manual = self.internet.force_tailscale.as_ref() == Some(&dir);
-        let connection = servers::connectivity::current(&dir);
-        if !manual {
-            match &connection {
-                Some(servers::connectivity::Connection::Direct { address, method }) => {
-                    let t = self.theme;
-                    let value = address.clone();
-                    let copied = self.internet.copied.as_ref().is_some_and(|(what, at)| {
-                        what == &value && at.elapsed() < Duration::from_secs(2)
-                    });
-                    let copy = ui::icon_button(
-                        "direct-address-copy",
-                        if copied { "tick-02" } else { "copy-01" },
-                        36., 17., 10., false, &t,
-                    ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        copy_to_clipboard(cx, gpui::ClipboardItem::new_string(value.clone()));
-                        this.internet.copied = Some((value.clone(), Instant::now()));
-                        cx.notify();
-                    }));
-                    let selected = dir.clone();
-                    return div().flex().flex_col().gap(px(8.))
-                        .child(ui::card_heading("Over the internet · Direct"))
-                        .child(ui::card_note(format!(
-                            "Router opened TCP with {method}. No extra software needed; access from outside is not independently verified."
-                        )))
-                        .child(div().flex().items_center().justify_between().gap(px(8.))
-                            .child(ui::text(15., FontWeight::MEDIUM, ink::FULL)
-                                .min_w_0().truncate().child(address.clone()))
-                            .child(copy))
-                        .child(ui::quiet("direct-fallback", "Friends can't connect? Use Tailscale", 36., &t)
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.internet.force_tailscale = Some(selected.clone());
-                                this.internet_refresh();
-                                cx.notify();
-                            })));
+        let t = self.theme;
+        let panel = div().flex().flex_col().gap(px(8.))
+            .child(ui::card_heading(tr("Public Java server")));
+        match servers::connectivity::current(&dir) {
+            Some(servers::connectivity::Connection::Public { address }) => {
+                let copied = self.internet.copied.as_ref().is_some_and(|(what, at)| {
+                    what == &address && at.elapsed() < Duration::from_secs(2)
+                });
+                let copy_value = address.clone();
+                let copy = ui::icon_button(
+                    "public-relay-copy",
+                    if copied { "tick-02" } else { "copy-01" },
+                    36., 17., 10., false, &t,
+                ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    copy_to_clipboard(cx, gpui::ClipboardItem::new_string(copy_value.clone()));
+                    this.internet.copied = Some((copy_value.clone(), Instant::now()));
+                    cx.notify();
+                }));
+                panel
+                    .child(ui::card_note(tr("Your server is publicly reachable through the free relay. Friends join using normal Minecraft: Java Edition.")))
+                    .child(div().flex().items_center().justify_between().gap(px(8.))
+                        .child(ui::text(15., FontWeight::MEDIUM, ink::FULL)
+                            .min_w_0().truncate().child(address))
+                        .child(copy))
+                    .child(ui::card_note(tr("Java Edition only. The assigned address may change after a restart or reconnect. The shared relay has no uptime guarantee.")))
+            }
+            Some(servers::connectivity::Connection::Checking) => panel
+                .child(ui::card_note(tr("Connecting to the free public relay. No router changes or separate apps are needed."))),
+            state => {
+                let running = servers::java::is_running(&dir);
+                let panel = match state {
+                    Some(servers::connectivity::Connection::Unavailable { reason }) => panel
+                        .child(ui::card_note(tr("The free public relay is not connected. Friends cannot join from outside your network yet.")))
+                        .child(ui::card_note(reason)),
+                    _ if running => panel
+                        .child(ui::card_note(tr("The server is running but has no public relay connection."))),
+                    _ => panel
+                        .child(ui::card_note(tr("Press Start to host a public Java server. Valtic will connect through a free relay automatically."))),
+                };
+                if running {
+                    let target = dir.clone();
+                    panel.child(button("public-relay-retry", "Retry connection", Kind::Ghost, &t)
+                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                            servers::connectivity::start(target.clone(), port);
+                            cx.notify();
+                        })))
+                } else {
+                    panel
                 }
-                Some(servers::connectivity::Connection::Checking) => {
-                    return div().flex().flex_col().gap(px(8.))
-                        .child(ui::card_heading("Over the internet"))
-                        .child(ui::card_note("Trying free automatic port forwarding (PCP, NAT-PMP and UPnP)…"));
-                }
-                None => {
-                    let t = self.theme;
-                    if !servers::java::is_running(&dir) {
-                        return div().flex().flex_col().gap(px(8.))
-                            .child(ui::card_heading("Over the internet"))
-                            .child(ui::card_note("Press Start. Valtic will try your router automatically, then offer free Tailscale if needed."));
-                    }
-                    let check_dir = dir.clone();
-                    return div().flex().flex_col().gap(px(8.))
-                        .child(ui::card_heading("Over the internet"))
-                        .child(ui::card_note("The server is running. Try automatic port forwarding."))
-                        .child(ui::quiet("direct-check", "Check router", 36., &t)
-                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
-                                servers::connectivity::start(check_dir.clone(), port);
-                                cx.notify();
-                            })));
-                }
-                Some(servers::connectivity::Connection::Tailscale { .. }) => {}
             }
         }
-        let reason = match connection {
-            Some(servers::connectivity::Connection::Tailscale { reason }) =>
-                format!("Automatic port forwarding unavailable: {reason}. Use Tailscale instead."),
-            _ => "Use Tailscale if friends cannot reach the direct server address.".to_string(),
-        };
-        div().flex().flex_col().gap(px(8.))
-            .child(ui::card_note(reason))
-            .child(self.glass_internet(port, cx))
-            .child(ui::card_note("Friends need Tailscale installed and signed in, and must accept your device-sharing invitation."))
     }
 
     pub(super) fn internet_invites(&mut self, port: u16, cx: &mut Context<Self>) -> Div {
-        if let Some(dir) = &self.servers.open {
-            if servers::java::is_java(dir)
-                && self.internet.force_tailscale.as_ref() != Some(dir)
-                && !matches!(servers::connectivity::current(dir),
-                    Some(servers::connectivity::Connection::Tailscale { .. }))
-            {
-                return div();
-            }
+        if self.servers.open.as_deref().is_some_and(servers::java::is_java) {
+            return div();
         }
         if !matches!(self.internet.state, Some(State::Running(_))) {
             return div();

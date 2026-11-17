@@ -700,7 +700,7 @@ impl Launcher {
                         let is_java = servers::java::is_java(&entry.dir);
                         self.open_server(entry.dir.clone());
                         self.servers.note = Some(if is_java {
-                            format!("{} is installed. Press Start. Valtic will try your router first, then guide you through free Tailscale if needed.", entry.name)
+                            format!("{} is installed. Press Start to host publicly using the free built-in Java relay. The assigned address will appear in the Servers panel.", entry.name)
                         } else {
                             format!("{} is ready. Press Start, then give your friends the address below.", entry.name)
                         });
@@ -2025,10 +2025,13 @@ impl Launcher {
             .child(text(theme::CAPTION).text_color(t.ink_soft).child(tr(
                 "Friends on the same Wi-Fi: Multiplayer, Add Server, then paste this address.",
             )))
-            .child(text(theme::CAPTION).text_color(t.muted).child(trf(
-                "Friends elsewhere can't reach it as it is: use Tailscale (free, nothing to change on your router, only people you invite), or forward TCP port {port} on your router to this computer.",
-                &[("port", &port.to_string())],
-            )));
+            .child(text(theme::CAPTION).text_color(t.muted).child(
+                if self.servers.open.as_deref().is_some_and(servers::java::is_java) {
+                    tr("Friends elsewhere use the public Java address shown below once the free relay connects. They only need Minecraft: Java Edition.").to_string()
+                } else {
+                    trf("Friends elsewhere can use Tailscale or forward TCP port {port} on your router.", &[("port", &port.to_string())])
+                },
+            ));
         let mut tab = div().flex().flex_col().gap(px(20.)).child(address_plate);
         if !status.players.is_empty() {
             let mut row = div().flex().flex_wrap().gap(px(16.));
