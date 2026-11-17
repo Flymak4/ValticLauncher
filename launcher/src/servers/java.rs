@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -262,7 +262,7 @@ fn install(software: Software, version: &str, dir: &Path, log: &dyn Fn(String)) 
     }
 }
 fn run_installer(dir: &Path, log: &dyn Fn(String)) -> Result<(), String> {
-    let status = Command::new("java").current_dir(dir)
+    let status = crate::process::command("java").current_dir(dir)
         .args(["-jar", "installer.jar", "--installServer"])
         .stdout(Stdio::piped()).stderr(Stdio::piped())
         .output().map_err(|e| format!("Java is required to install this server: {e}"))?;
@@ -346,7 +346,7 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, a
     if !(1..=16).contains(&ram_gb) {
         return Err(Problem::plain("Server RAM must be between 1 and 16 GB."));
     }
-    Command::new("java").arg("-version").output()
+    crate::process::command("java").arg("-version").output()
         .map_err(|_| Problem::plain("Install a compatible Java runtime and add java to PATH before creating a server."))?;
     let name = if spec.name.trim().is_empty() { "My server" } else { spec.name.trim() };
     let dir = super::new_folder(name);
@@ -398,7 +398,7 @@ pub fn start(dir: &Path) -> Result<String, Problem> {
     let file = OpenOptions::new().create(true).append(true).open(log_dir.join("valtic-console.log"))
         .map_err(|e| Problem::plain(e.to_string()))?;
     let err = file.try_clone().map_err(|e| Problem::plain(e.to_string()))?;
-    let child = Command::new("java").current_dir(dir).args(launch_args(&meta))
+    let child = crate::process::command("java").current_dir(dir).args(launch_args(&meta))
         .stdin(Stdio::piped()).stdout(Stdio::from(file)).stderr(Stdio::from(err))
         .spawn().map_err(|e| Problem::plain(format!("Failed to launch Java: {e}")))?;
     active.insert(dir.to_owned(), Running { child, started: Instant::now() });
