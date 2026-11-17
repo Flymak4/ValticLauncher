@@ -431,6 +431,9 @@ pub fn edit_existing(
     if spec.friends_only && !spec.check_accounts {
         return Err(Problem::plain("Friends-only access needs Minecraft account verification enabled."));
     }
+    if spec.friends_only && spec.players.is_empty() {
+        return Err(Problem::plain("Add at least one allowed Minecraft player before enabling friends-only access."));
+    }
     if addons.voice_chat && !super::addons::supports_voice_chat(software) {
         return Err(Problem::plain("This software does not support Simple Voice Chat."));
     }
