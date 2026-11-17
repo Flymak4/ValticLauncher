@@ -155,14 +155,14 @@ pub fn configure_network(
     voice_host: Option<&str>,
     geyser_port: u16,
 ) -> Result<(), String> {
-    if let Some(host) = voice_host {
+    if voice_port > 0 {
         let path = if software == Software::Paper {
             dir.join("plugins/voicechat/voicechat-server.properties")
         } else {
             dir.join("config/voicechat/voicechat-server.properties")
         };
         set_property(&path, "port", &voice_port.to_string())?;
-        set_property(&path, "voice_host", host)?;
+        set_property(&path, "voice_host", voice_host.unwrap_or(""))?;
     }
     if geyser_port > 0 {
         configure_geyser(&dir.join("plugins/Geyser-Spigot/config.yml"), geyser_port)?;
