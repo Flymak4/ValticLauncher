@@ -83,6 +83,126 @@ fn geyser_jar(dir: &Path, project: &str, platform: &str, filename: &str) -> Resu
     verify
 }
 
+
+/// Write or update a Java properties key without discarding the plugin's other settings.
+fn set_property(path: &Path, key: &str, value: &str) -> Result<(), String> {
+    let old = fs::read_to_string(path).unwrap_or_default();
+    let prefix = format!("{key}=");
+    let mut found = false;
+    let mut lines = Vec::new();
+    for line in old.lines() {
+        if line.trim_start().starts_with(&prefix) {
+            if !found {
+                lines.push(format!("{key}={value}"));
+                found = true;
+            }
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !found {
+        lines.push(format!("{key}={value}"));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(path, format!("{}\\n", lines.join("\\n"))).map_err(|e| e.to_string())
+}
+
+/// Keep Geyser's generated YAML intact while setting the three network values Valtic owns.
+fn configure_geyser(path: &Path, port: u16) -> Result<(), String> {
+    let old = fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<String> = if old.is_empty() {
+        vec!["bedrock:".into()]
+    } else {
+        old.lines().map(str::to_owned).collect()
+    };
+    let start = lines.iter().position(|line| line.trim() == "bedrock:");
+    let start = match start {
+        Some(index) => index,
+        None => {
+            lines.push("bedrock:".into());
+            lines.len() - 1
+        }
+    };
+    let end = lines.iter().enumerate().skip(start + 1)
+        .find(|(_, line)| !line.is_empty() && !line.starts_with(' ') && !line.starts_with('#'))
+        .map(|(index, _)| index).unwrap_or(lines.len());
+    for (key, value) in [
+        ("address", "0.0.0.0".to_string()),
+        ("port", port.to_string()),
+        ("clone-remote-port", "false".to_string()),
+    ] {
+        let prefix = format!("  {key}:");
+        if let Some(index) = (start + 1..end).find(|&index| lines[index].trim_start().starts_with(&prefix.trim_start())) {
+            lines[index] = format!("  {key}: {value}");
+        } else {
+            lines.insert(end.min(lines.len()), format!("  {key}: {value}"));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(path, format!("{}\\n", lines.join("\\n"))).map_err(|e| e.to_string())
+}
+
+/// Apply the public UDP endpoints before Java starts, so plugins bind to the ports
+/// Playit forwards and Simple Voice Chat advertises its actual public endpoint.
+pub fn configure_network(
+    dir: &Path,
+    software: Software,
+    voice_port: u16,
+    voice_host: Option<&str>,
+    geyser_port: u16,
+) -> Result<(), String> {
+    if let Some(host) = voice_host {
+        let path = if software == Software::Paper {
+            dir.join("plugins/voicechat/voicechat-server.properties")
+        } else {
+            dir.join("config/voicechat/voicechat-server.properties")
+        };
+        set_property(&path, "port", &voice_port.to_string())?;
+        set_property(&path, "voice_host", host)?;
+    }
+    if geyser_port > 0 {
+        configure_geyser(&dir.join("plugins/Geyser-Spigot/config.yml"), geyser_port)?;
+    }
+    Ok(())
+}
+
+/// A conservative local check; the Playit tunnel and plugin startup are checked separately.
+pub fn network_config_matches(
+    dir: &Path,
+    software: Software,
+    voice_port: u16,
+    voice_host: Option<&str>,
+    geyser_port: u16,
+) -> (bool, bool) {
+    let voice_ok = if let Some(host) = voice_host {
+        let path = if software == Software::Paper {
+            dir.join("plugins/voicechat/voicechat-server.properties")
+        } else {
+            dir.join("config/voicechat/voicechat-server.properties")
+        };
+        fs::read_to_string(path).ok().is_some_and(|text| {
+            text.lines().any(|l| l.trim() == format!("port={voice_port}"))
+                && text.lines().any(|l| l.trim() == format!("voice_host={host}"))
+        })
+    } else {
+        false
+    };
+    let geyser_ok = if geyser_port > 0 {
+        fs::read_to_string(dir.join("plugins/Geyser-Spigot/config.yml")).ok().is_some_and(|text| {
+            text.lines().any(|l| l.trim() == format!("port: {geyser_port}"))
+                && text.lines().any(|l| l.trim() == "address: 0.0.0.0")
+                && text.lines().any(|l| l.trim() == "clone-remote-port: false")
+        })
+    } else {
+        false
+    };
+    (voice_ok, geyser_ok)
+}
+
 pub fn install(dir: &Path, software: Software, version: &str, addons: Addons, log: &dyn Fn(String)) -> Result<(), String> {
     if addons.voice_chat && !supports_voice_chat(software) {
         return Err("Voice chat needs Paper, Fabric, Forge or NeoForge (not Vanilla).".into());
