@@ -3436,6 +3436,7 @@ impl Launcher {
         let can_voice = software != "vanilla" && software != "rust";
         let can_geyser = software == "paper";
         let (friends_only, eula, eula_missing) = (c.friends_only, c.eula, c.eula_missing);
+        let editing = c.editing.is_some();
         let creating = self.servers.creating;
         let row = |label: &'static str, control: AnyElement| {
             div()
@@ -3457,13 +3458,21 @@ impl Launcher {
                 });
             }
         };
-        let software_control = segments(
-            "create-software",
-            &SOFTWARES,
-            software,
-            &t,
-            pick(choose_server_software),
-        );
+        let software_control = if editing {
+            text(theme::UI).text_color(t.ink).child(format!(
+                "{} · kept unchanged to protect your server",
+                SOFTWARES.iter().find(|(id, _)| *id == software)
+                    .map_or(software, |(_, label)| *label)
+            )).into_any_element()
+        } else {
+            segments(
+                "create-software",
+                &SOFTWARES,
+                software,
+                &t,
+                pick(choose_server_software),
+            ).into_any_element()
+        };
         let world_kind = segments(
             "create-world",
             &[("new", "New world"), ("copy", "Copy one of my worlds")],
@@ -3722,15 +3731,18 @@ impl Launcher {
             .pt(px(28.))
             .pb(px(20.))
             .overflow_y_scroll()
-            .child(caps("New server").text_color(t.muted))
+            .child(caps(if editing { "Edit server" } else { "New server" }).text_color(t.muted))
             .child(
                 text(theme::HEADING)
                     .text_color(t.ink)
-                    .child("Create a server"),
+                    .child(if editing { "Edit server setup" } else { "Create a server" }),
             )
             .child(text(theme::CAPTION).text_color(t.muted).child(
-                "Everything has a default: tick the EULA and Create makes a friends-only survival \
-                 world. You can change all of it later.",
+                if editing {
+                    "Change the current server's rules and features. Software, Minecraft version and world are preserved. Stop it before saving."
+                } else {
+                    "Everything has a default: tick the EULA and Create makes a friends-only survival world."
+                },
             ))
             .child(row(
                 "Name",
@@ -3740,7 +3752,12 @@ impl Launcher {
             .child(row("Server software", div().flex().child(software_control).into_any_element()))
             .child(row(
                 "Minecraft version",
-                if software == "rust" {
+                if editing {
+                    text(theme::UI).text_color(t.ink)
+                        .child(format!("{} · kept unchanged",
+                            if software == "rust" { "26.3" } else { self.servers.value(Field::JavaVersion) }))
+                        .into_any_element()
+                } else if software == "rust" {
                     text(theme::UI).text_color(t.ink)
                         .child("26.3 · Horizon Rust (recommended)")
                         .into_any_element()
@@ -3756,7 +3773,7 @@ impl Launcher {
                     .into_any_element(),
             )))
             .child(row("Optional features", optional_features.into_any_element()))
-            .child(row(
+            .when(!editing, |d| d.child(row(
                 "World",
                 div()
                     .flex()
@@ -3765,7 +3782,13 @@ impl Launcher {
                     .child(div().flex().child(world_kind))
                     .child(world_detail)
                     .into_any_element(),
-            ))
+            )))
+            .when(editing, |d| d.child(row(
+                "World",
+                text(theme::CAPTION).text_color(t.muted)
+                    .child("Current world, seed and backups are preserved.")
+                    .into_any_element(),
+            )))
             .child(row(
                 "Game mode",
                 div().flex().child(modes).into_any_element(),
@@ -3795,7 +3818,7 @@ impl Launcher {
                     })
                     .into_any_element(),
             ))
-            .child(eula_line);
+            .when(!editing, |d| d.child(eula_line));
         let mut foot = div()
             .flex()
             .flex_none()
@@ -3813,7 +3836,7 @@ impl Launcher {
                     .min_w_0()
                     .text_color(t.muted)
                     .truncate()
-                    .child(format!("Creating… {last}")),
+                    .child(format!("{} {last}", if editing { "Saving…" } else { "Creating…" })),
             );
         } else if let Some(p) = &self.servers.problem {
             foot = foot.child(
@@ -3842,7 +3865,7 @@ impl Launcher {
             );
         }
         let cancel = button("create-cancel", "Cancel", Kind::Secondary, &t);
-        let create = button("create-go", "Create", Kind::Primary, &t);
+        let create = button("create-go", if editing { "Save changes" } else { "Create" }, Kind::Primary, &t);
         foot = if creating {
             foot.child(disabled(cancel)).child(disabled(create))
         } else {
