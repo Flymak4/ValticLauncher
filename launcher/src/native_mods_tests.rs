@@ -63,6 +63,10 @@ fn a_rebuild_leaves_the_old_builds_mod_data_behind() {
     use std::ffi::OsStr;
     for own in [
         backend::CLIENT,
+        "horizon-client",
+        "horizon-client.exe",
+        "valtic-client",
+        "valtic-client.exe",
         ".installed",
         "native-mods.json",
         "native-data",
