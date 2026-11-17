@@ -534,13 +534,25 @@ impl Launcher {
                 ..Query::new(m.text.text(), m.kind)
             },
         };
-        // A Java instance's files are Modrinth's; Horizon's registry is for Horizon.
-        let source = match m.java_for(m.kind) {
-            Some(_) => SourceId::Modrinth,
-            None => m.source,
+        // An instance's Mods tab has exactly one source:
+        // Rust -> the native registry, Java loaders -> compatible Modrinth
+        // files. Vanilla has no mod loader, so never suggest .jar installs.
+        let source = if m.kind == PackKind::Mod {
+            if m.java.is_some() { SourceId::Modrinth } else { SourceId::Horizon }
+        } else {
+            match m.java_for(m.kind) {
+                Some(_) => SourceId::Modrinth,
+                None => m.source,
+            }
         };
+        let vanilla_mods = m.kind == PackKind::Mod
+            && m.java.as_ref().is_some_and(|target| target.loader.is_none());
         let (tx, search) = (m.tx.clone(), m.search);
         std::thread::spawn(move || {
+            if vanilla_mods {
+                let _ = tx.send(Event::Found(search, offset, Ok(Vec::new())));
+                return;
+            }
             let result = browser::source(source)
                 .ok_or_else(|| trf("{source} isn't set up.", &[("source", source.label())]))
                 .and_then(|s| s.search(&query));
@@ -1091,9 +1103,17 @@ impl Launcher {
             .selected_instance()
             .and_then(|i| i.java.as_ref())
             .map(|j| j.target());
-        // Another version or loader: other results, on the page's next draw.
+        // Switching instance type, loader or game version invalidates all
+        // search results and source tabs. Never show Fabric mods on Forge,
+        // or Modrinth Java mods on a native Rust instance.
         if java != self.mods.java {
             self.mods.asked = false;
+            self.mods.source = if java.is_some() { SourceId::Modrinth }
+                else { source_for(self.mods.kind) };
+            self.mods.browse.filters = Default::default();
+            self.mods.browse.open = None;
+            self.mods.picked = None;
+            self.mods.results.clear();
         }
         self.mods.java = java;
         // The instance moved to another Horizon (picked, or an update it follows): the versions
@@ -1110,6 +1130,11 @@ impl Launcher {
         if !self.mods.loaded || (home.is_some() && self.mods.home != home) {
             // Another instance: what works there, its versions and the last message differ.
             if self.mods.loaded {
+                self.mods.source = if self.mods.java.is_some() { SourceId::Modrinth }
+                    else { source_for(self.mods.kind) };
+                self.mods.browse.filters = Default::default();
+                self.mods.browse.open = None;
+                self.mods.picked = None;
                 self.mods.about.clear();
                 self.mods.works.clear();
                 self.mods.message = None;
@@ -1135,7 +1160,7 @@ impl Launcher {
     pub(super) fn mods_find_for_instance(&mut self) {
         self.mods_set_kind(PackKind::Mod);
         let m = &mut self.mods;
-        m.source = source_for(PackKind::Mod);
+        m.source = if m.java.is_some() { SourceId::Modrinth } else { SourceId::Horizon };
         m.browse.open = None;
         m.picked = None;
         m.browse.filters.works_on = true;
@@ -1146,7 +1171,11 @@ impl Launcher {
     pub(super) fn mods_set_kind(&mut self, kind: PackKind) {
         if self.mods.kind != kind {
             self.mods.kind = kind;
-            self.mods.source = source_for(kind);
+            self.mods.source = if self.mods.java.is_some() {
+                SourceId::Modrinth
+            } else {
+                source_for(kind)
+            };
             // A data pack goes into a world: one may have been made since.
             if kind == PackKind::DataPack {
                 self.mods.read_worlds();
@@ -1269,7 +1298,7 @@ impl Launcher {
         // inert, never searched (like the Microsoft account's "Coming soon").
         // A Java instance's files come from Modrinth, for its version.
         let java = self.mods.java_for(self.mods.kind).is_some();
-        let source_note = (switches(self.mods.kind) && !java)
+        let source_note = (switches(self.mods.kind) && !java && self.mods.kind != PackKind::Mod)
             .then(|| div().flex().child(self.mods_source_switch(cx)));
         // The registry lists only what was made for Horizon: no "everything", and of the filters
         // only its categories.
