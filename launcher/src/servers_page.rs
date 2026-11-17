@@ -2797,6 +2797,28 @@ impl Launcher {
 
     fn settings_tab(&mut self, status: &Status, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
+        let edit = button("edit-server-setup", "Edit server setup", Kind::Primary, &t)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.open_edit_server(cx);
+                cx.notify();
+            }));
+        if self.servers.open.as_deref().is_some_and(servers::java::is_java) {
+            let current = self.servers.open.as_ref()
+                .and_then(|dir| servers::java::metadata(dir).ok());
+            return div().flex().flex_col().gap(px(14.))
+                .child(div().flex().child(edit))
+                .child(text(theme::UI).text_color(t.ink).child(
+                    "Open the original setup screen to edit the server name, RAM, game rules, player limit, account access and add-ons."
+                ))
+                .children(current.map(|meta| text(theme::CAPTION).text_color(t.muted)
+                    .child(format!(
+                        "Current software: {} {} · {} GB RAM. Engine, Minecraft version and the existing world stay unchanged.",
+                        meta.software.label(), meta.minecraft_version, meta.ram_gb
+                    ))))
+                .child(text(theme::CAPTION).text_color(t.muted).child(
+                    "Stop the server before saving. Manage operators and whitelisted players on the Players tab."
+                ));
+        }
         // The glass look draws no rules between rows, as the mockup.
         let rule = if t.glass {
             gpui::transparent_black()
@@ -2805,7 +2827,9 @@ impl Launcher {
         };
         let running = status.running();
         if self.servers.config.is_none() {
-            return div().child(centered(
+            return div().flex().flex_col().gap(px(12.))
+                .child(div().flex().child(edit))
+                .child(centered(
                 if self.older_horizon() {
                     tr(
                         "This server's Valtic build is too old to show its settings here. Update it on \
@@ -2969,6 +2993,10 @@ impl Launcher {
             .flex()
             .flex_col()
             .gap(px(12.))
+            .child(div().flex().child(edit))
+            .child(text(theme::CAPTION).text_color(t.muted).child(
+                "Edit server setup reopens the original setup screen. Change settings there without creating another server."
+            ))
             .child(text(theme::CAPTION).text_color(t.muted).child(tr(
                 "Changes save as you make them. Those the game can't take while it runs wait for \
                  a restart, and the page says so.",
