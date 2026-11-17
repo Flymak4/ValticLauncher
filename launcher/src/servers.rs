@@ -113,6 +113,22 @@ pub fn add(entry: Entry) -> Result<(), String> {
     save_list(&all)
 }
 
+/// Renames an existing server in the launcher without moving its directory,
+/// game data, whitelist, mods or backups.
+pub fn rename(dir: &Path, name: &str) -> Result<Entry, String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 100 || name.contains(['\n', '\r']) {
+        return Err("Enter a server name of 1–100 characters without line breaks.".into());
+    }
+    let mut all = list();
+    let entry = all.iter_mut().find(|e| e.host.is_none() && e.dir == dir)
+        .ok_or("This server is no longer registered in Valtic.")?;
+    entry.name = name.to_string();
+    let updated = entry.clone();
+    save_list(&all)?;
+    Ok(updated)
+}
+
 /// Takes a server on this computer off the list; its folder stays.
 pub fn forget(dir: &Path) -> Result<(), String> {
     let mut all = list();
