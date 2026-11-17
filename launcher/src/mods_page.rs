@@ -731,12 +731,15 @@ impl Launcher {
 
     /// Looks for newer versions of what the browser installed.
     fn mods_check_updates(&mut self) {
-        let entries = self.mods.installed.clone();
+        let java = self.mods.java.clone();
+        let entries: Vec<_> = self.mods.installed.iter()
+            .filter(|e| matching_engine(e, java.as_ref()))
+            .cloned()
+            .collect();
         if entries.is_empty() {
             return;
         }
         let tx = self.mods.tx.clone();
-        let java = self.mods.java.clone();
         let home = self.mods.home();
         std::thread::spawn(move || {
             let mut found = HashMap::new();
@@ -767,9 +770,8 @@ impl Launcher {
             .installed
             .iter()
             .filter(|e| {
-                self.mods
-                    .updates
-                    .contains_key(&(e.source, e.project.clone()))
+                matching_engine(e, self.mods.java.as_ref())
+                    && self.mods.updates.contains_key(&(e.source, e.project.clone()))
             })
             .map(|e| (e.source, e.project.clone(), e.title.clone()))
             .collect();
@@ -2219,6 +2221,19 @@ pub(super) fn auto_update(targets: &[AutoTarget]) -> (Vec<String>, Vec<String>) 
         }
     }
     (lines, rebuild)
+}
+
+/// Installed Java mods must never be updated through Rust's registry, and
+/// Rust native mods must never be updated by a Java profile. Other pack types
+/// (resource packs and data packs) are shared Minecraft formats.
+fn matching_engine(entry: &installed::Entry, java: Option<&Target>) -> bool {
+    if entry.kind != PackKind::Mod {
+        return true;
+    }
+    match java {
+        Some(target) => target.loader.is_some() && entry.source == SourceId::Modrinth,
+        None => entry.source == SourceId::Horizon,
+    }
 }
 
 /// Where a kind's tab searches first: Horizon's registry for mods and shader packs, Modrinth for
