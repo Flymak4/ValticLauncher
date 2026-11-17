@@ -118,7 +118,7 @@ const MODES: [(&str, &str); 3] = [
     ("adventure", "Adventure"),
 ];
 
-const SOFTWARES: [(&str, &str); 4] = [("vanilla", "Vanilla"), ("fabric", "Fabric"), ("forge", "Forge"), ("neoforge", "NeoForge")];
+const SOFTWARES: [(&str, &str); 5] = [("vanilla", "Vanilla"), ("paper", "Paper"), ("fabric", "Fabric"), ("forge", "Forge"), ("neoforge", "NeoForge")];
 
 const DIFFICULTIES: [(&str, &str); 4] = [
     ("peaceful", "Peaceful"),
@@ -166,6 +166,8 @@ pub(super) struct Create {
     mode: &'static str,
     software: &'static str,
     ram_gb: u8,
+    voice_chat: bool,
+    geyser: bool,
     versions: Vec<String>,
     difficulty: &'static str,
     max_players: u32,
@@ -1058,6 +1060,8 @@ impl Launcher {
             mode: "survival",
             software: "vanilla",
             ram_gb: 4,
+            voice_chat: false,
+            geyser: false,
             versions: Vec::new(),
             difficulty: "normal",
             max_players: 10,
@@ -1121,6 +1125,7 @@ impl Launcher {
         let software = servers::java::Software::parse(c.software).unwrap_or(servers::java::Software::Vanilla);
         let minecraft_version = self.servers.value(Field::JavaVersion).trim().to_string();
         let ram_gb = c.ram_gb;
+        let addons = servers::addons::Addons { voice_chat: c.voice_chat, geyser: c.geyser };
         let tx = self.servers.tx.clone();
         self.servers.creating = true;
         self.servers.problem = None;
@@ -1130,7 +1135,7 @@ impl Launcher {
             let log = move |l: String| {
                 let _ = lines.send(Event::Line(l));
             };
-            let _ = tx.send(Event::Created(servers::java::create(&spec, software, &minecraft_version, ram_gb, &log)));
+            let _ = tx.send(Event::Created(servers::java::create(&spec, software, &minecraft_version, ram_gb, addons, &log)));
         });
     }
 
