@@ -292,6 +292,42 @@ impl Launcher {
                     .child(buttons),
             )
             .child(corner);
+        // Paper servers may have been created before the voice-chat option
+        // existed. Keep the setup/repair action available on existing servers.
+        if servers::java::metadata(dir).ok()
+            .is_some_and(|meta| meta.software == servers::java::Software::Paper)
+        {
+            let configured = servers::java::metadata(dir).ok().is_some_and(|meta| {
+                meta.voice_chat && dir.join("plugins/simple-voice-chat.jar").is_file()
+            });
+            let setup = ui::quiet(
+                "server-setup-voice",
+                if configured { "Repair voice chat" } else { "Set up voice chat" },
+                40.,
+                &t,
+            );
+            let setup = if idle {
+                setup.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.setup_paper_voice_chat();
+                    cx.notify();
+                }))
+            } else {
+                setup.opacity(0.4).cursor_default()
+            };
+            glass = glass.child(
+                div()
+                    .relative()
+                    .mt(px(14.))
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(setup)
+                    .child(ui::card_note(
+                        "Installs Simple Voice Chat, sets the UDP port and configures Playit. If Playit needs first-time approval, Valtic will show the reason.",
+                    )),
+            );
+        }
         // What the launcher says besides (not in the mockup): a crash count, the action under way,
         // a problem, a note, settings that wait for a restart.
         if status.crashes > 0 {
