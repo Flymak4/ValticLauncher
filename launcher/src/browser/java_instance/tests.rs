@@ -118,6 +118,24 @@ fn home(name: &str) -> PathBuf {
 const NONE: &dyn Fn(&str, f32) = &|_, _| {};
 
 #[test]
+fn search_filters_match_only_the_selected_java_loader_and_version() {
+    for loader in ["fabric", "forge", "neoforge"] {
+        let target = target("1.21.1", Some(loader));
+        let query = target.search("zoom", Kind::Mod, &details::Filters::default());
+        let facets: Vec<Vec<String>> = serde_json::from_str(&modrinth::facets(&query)).unwrap();
+        assert!(facets.iter().any(|group| group == &vec![format!("categories:{loader}")]),
+            "no exact loader facet for {loader}: {facets:?}");
+        assert!(facets.iter().any(|group| group == &vec!["versions:1.21.1".to_string()]),
+            "wrong game version for {loader}: {facets:?}");
+        assert!(facets.iter().any(|group| group == &vec!["project_type:mod".to_string()]));
+        assert_eq!(target.folder(Kind::Mod).unwrap(), "mods");
+    }
+    let vanilla = target("1.21.1", None);
+    assert!(vanilla.folder(Kind::Mod).is_err());
+    assert_eq!(vanilla.folder(Kind::ResourcePack).unwrap(), "resourcepacks");
+}
+
+#[test]
 fn picks_the_newest_file_for_the_version_and_loader() {
     let mut fake = Fake::default();
     fake.release("sodium", Kind::Mod, "1", &["1.21.1"], &["fabric"], &[]);
