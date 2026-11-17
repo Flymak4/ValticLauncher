@@ -449,6 +449,10 @@ impl Launcher {
         let sorts = self.mods_sorts();
         let registry =
             self.mods.source == SourceId::Horizon && self.mods.java_for(self.mods.kind).is_none();
+        // The selected Java instance fixes these two values. Do not offer
+        // misleading loader/version buttons that search will ignore.
+        let locked_java_mods = self.mods.kind == PackKind::Mod
+            && self.mods.java.is_some();
         let sort = (!t.glass && !registry).then(|| self.mods_sort_dropdown(&sorts, f.sort, cx));
         let shown = self.mods.browse.show_filters;
         let active = f.categories.len()
@@ -590,7 +594,10 @@ impl Launcher {
             },
         ));
         if !registry {
-            bar = bar.child(loaders).child(versions).child(environment);
+            if !locked_java_mods {
+                bar = bar.child(loaders).child(versions);
+            }
+            bar = bar.child(environment);
         }
         bar = bar.child(categories);
         if registry && !tags.tags.is_empty() {
