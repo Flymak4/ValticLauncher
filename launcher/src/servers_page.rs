@@ -485,6 +485,29 @@ fn uptime(secs: u64) -> String {
     }
 }
 
+/// Start a Java server and report any Playit failures instead of ignoring them.
+/// Starting locally still succeeds, but the UI must never claim remote voice
+/// chat is ready when the UDP tunnel could not be created.
+fn launch_java_with_playit(dir: &Path) -> Result<String, Problem> {
+    let meta = servers::java::metadata(dir).map_err(Problem::plain)?;
+    let tunnels = servers::connectivity::prepare(dir);
+    servers::addons::configure_network(
+        dir, meta.software, meta.voice_port,
+        tunnels.as_ref().ok().and_then(|t| t.voice_address.as_deref()),
+        meta.geyser_port,
+    ).map_err(Problem::plain)?;
+    let note = servers::java::start(dir)?;
+    match tunnels {
+        Ok(info) => {
+            servers::connectivity::monitor(dir.to_path_buf(), info);
+            Ok(note)
+        }
+        Err(reason) => Err(Problem::plain(format!(
+            "{note}. The server is running locally, but public Playit access is not ready: {reason} Voice chat will need its UDP tunnel before players outside your network can hear each other."
+        ))),
+    }
+}
+
 impl Launcher {
     // ----- Background work ------------------------------------------------------------------
 
@@ -899,6 +922,33 @@ impl Launcher {
         });
     }
 
+    /// Install and configure Simple Voice Chat even on Paper servers created
+    /// before the user enabled the add-on. Restart once to apply the plugin.
+    fn setup_paper_voice_chat(&mut self) {
+        let Some(dir) = self.servers.open.clone() else { return; };
+        if servers::java::metadata(&dir).ok().map(|m| m.software) != Some(servers::java::Software::Paper) {
+            self.servers.problem = Some(Problem::plain("Select a Paper server to set up Simple Voice Chat."));
+            return;
+        }
+        self.server_job("Setting up Paper voice chat", move |log| {
+            if servers::java::is_running(&dir) {
+                log("Stopping Paper to install the plugin safely".into());
+                servers::java::stop(&dir)?;
+                servers::connectivity::stop(&dir);
+                for _ in 0..150 {
+                    if !servers::java::is_running(&dir) { break; }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                if servers::java::is_running(&dir) {
+                    return Err(Problem::plain("Paper did not finish stopping. Stop it and try Setup Voice Chat again."));
+                }
+            }
+            servers::java::enable_voice_chat(&dir, log)?;
+            log("Preparing the public UDP voice tunnel and starting Paper".into());
+            launch_java_with_playit(&dir)
+        });
+    }
+
     fn start_server(&mut self) {
         let Some(dir) = self.servers.open.clone() else {
             return;
@@ -906,19 +956,7 @@ impl Launcher {
         STARTED_HERE.lock().unwrap().push(dir.clone());
         self.servers.restart_needed.clear();
         if servers::java::is_java(&dir) {
-            self.server_job("Starting Java server", move |_log| {
-                let meta = servers::java::metadata(&dir).map_err(Problem::plain)?;
-                let tunnels = servers::connectivity::prepare(&dir).ok();
-                servers::addons::configure_network(
-                    &dir, meta.software, meta.voice_port,
-                    tunnels.as_ref().and_then(|t| t.voice_address.as_deref()), meta.geyser_port
-                ).map_err(Problem::plain)?;
-                let note = servers::java::start(&dir)?;
-                if let Some(tunnels) = tunnels {
-                    servers::connectivity::monitor(dir, tunnels);
-                }
-                Ok(note)
-            });
+            self.server_job("Starting Java server", move |_log| launch_java_with_playit(&dir));
             return;
         }
         self.server_job("Starting", move |log| {
@@ -970,17 +1008,7 @@ impl Launcher {
                 servers::connectivity::stop(&dir);
                 for _ in 0..100 {
                     if !servers::java::is_running(&dir) {
-                        let meta = servers::java::metadata(&dir).map_err(Problem::plain)?;
-                        let tunnels = servers::connectivity::prepare(&dir).ok();
-                        servers::addons::configure_network(
-                            &dir, meta.software, meta.voice_port,
-                            tunnels.as_ref().and_then(|t| t.voice_address.as_deref()), meta.geyser_port
-                        ).map_err(Problem::plain)?;
-                        let note = servers::java::start(&dir)?;
-                        if let Some(tunnels) = tunnels {
-                            servers::connectivity::monitor(dir.clone(), tunnels);
-                        }
-                        return Ok(note);
+                        return launch_java_with_playit(&dir);
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
