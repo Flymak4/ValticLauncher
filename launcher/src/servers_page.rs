@@ -1892,6 +1892,26 @@ impl Launcher {
             .child(
                 button("server-folder", "Open the folder", Kind::Ghost, &t)
                     .on_click(move |_, _, cx| crate::glass_toast::open(cx, &folder)),
+            )
+            .when(
+                servers::java::metadata(dir).ok()
+                    .is_some_and(|meta| meta.software == servers::java::Software::Paper),
+                |d| d.child({
+                    let b = button(
+                        "server-setup-voice",
+                        "Set up / repair voice chat",
+                        Kind::Secondary,
+                        &t,
+                    );
+                    if idle {
+                        b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.setup_paper_voice_chat();
+                            cx.notify();
+                        }))
+                    } else {
+                        disabled(b)
+                    }
+                }),
             );
 
         let mut page = div()
