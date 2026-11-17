@@ -54,6 +54,14 @@ pub struct Metadata {
     pub loader_version: Option<String>,
     pub ram_gb: u8,
     pub port: u16,
+    #[serde(default)]
+    pub voice_chat: bool,
+    #[serde(default)]
+    pub geyser: bool,
+    #[serde(default)]
+    pub voice_port: u16,
+    #[serde(default)]
+    pub geyser_port: u16,
     pub launch: Launch,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -362,8 +370,27 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, a
             log("Copying your existing world".into());
             super::copy_world(world, &dir.join("world")).map_err(|e| e.to_string())?;
         }
+        let mut udp_taken = super::ports_taken();
+        udp_taken.push(port);
+        let voice_port = if addons.voice_chat {
+            let selected = super::free_udp_port(24454, &udp_taken);
+            udp_taken.push(selected);
+            selected
+        } else { 0 };
+        let geyser_port = if addons.geyser {
+            super::free_udp_port(19132, &udp_taken)
+        } else { 0 };
         let meta = Metadata {
-            software, minecraft_version: version.into(), loader_version, ram_gb, port, launch,
+            software,
+            minecraft_version: version.into(),
+            loader_version,
+            ram_gb,
+            port,
+            voice_chat: addons.voice_chat,
+            geyser: addons.geyser,
+            voice_port,
+            geyser_port,
+            launch,
         };
         fs::write(dir.join(META), serde_json::to_vec_pretty(&meta).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
