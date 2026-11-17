@@ -526,7 +526,7 @@ impl Launcher {
     /// The glass Servers page's invitations (not in the mockup), under the server's Players: once
     /// Tailscale runs, inviting a friend to this computer, then the Funnel note.
 
-    /// Public Java hosting through a built-in TCP relay; no port mapping or Tailscale.
+    /// Public Java hosting through the official Playit.gg agent (managed by Valtic).
     pub(super) fn glass_java_internet(&mut self, port: u16, cx: &mut Context<Self>) -> Div {
         use crate::glass_ui as ui;
         use horizon_theme::glass::ink;
@@ -542,7 +542,7 @@ impl Launcher {
                 });
                 let copy_value = address.clone();
                 let copy = ui::icon_button(
-                    "public-relay-copy",
+                    "playit-copy",
                     if copied { "tick-02" } else { "copy-01" },
                     36., 17., 10., false, &t,
                 ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -551,29 +551,33 @@ impl Launcher {
                     cx.notify();
                 }));
                 panel
-                    .child(ui::card_note(tr("Your server is publicly reachable through the free relay. Friends join using normal Minecraft: Java Edition.")))
+                    .child(ui::card_note(tr("Playit.gg assigned this Java server address. Friends can join with normal Minecraft when the agent is online.")))
                     .child(div().flex().items_center().justify_between().gap(px(8.))
                         .child(ui::text(15., FontWeight::MEDIUM, ink::FULL)
                             .min_w_0().truncate().child(address))
                         .child(copy))
-                    .child(ui::card_note(tr("Java Edition only. The assigned address may change after a restart or reconnect. The shared relay has no uptime guarantee.")))
+                    .child(ui::card_note(tr("Java Edition uses Playit.gg. Bedrock and voice chat use separate UDP tunnels.")))
             }
             Some(servers::connectivity::Connection::Checking) => panel
-                .child(ui::card_note(tr("Connecting to the free public relay. No router changes or separate apps are needed."))),
+                .child(ui::card_note(tr("Setting up Playit.gg and checking your public Java address. No separate app installation is needed."))),
+            Some(servers::connectivity::Connection::SetupRequired { reason }) => panel
+                .child(ui::card_note(reason))
+                .child(button("playit-account", "Open Playit.gg", Kind::Ghost, &t)
+                    .on_click(|_: &ClickEvent, _: &mut Window, cx: &mut App| cx.open_url("https://playit.gg/account/agents"))),
             state => {
                 let running = servers::java::is_running(&dir);
                 let panel = match state {
                     Some(servers::connectivity::Connection::Unavailable { reason }) => panel
-                        .child(ui::card_note(tr("The free public relay is not connected. Friends cannot join from outside your network yet.")))
+                        .child(ui::card_note(tr("Playit.gg is not connected. Friends cannot join from outside your network yet.")))
                         .child(ui::card_note(reason)),
                     _ if running => panel
-                        .child(ui::card_note(tr("The server is running but has no public relay connection."))),
+                        .child(ui::card_note(tr("Playit.gg has not connected to this server."))),
                     _ => panel
-                        .child(ui::card_note(tr("Press Start to host a public Java server. Valtic will connect through a free relay automatically."))),
+                        .child(ui::card_note(tr("Press Start to host through Playit.gg. First-time setup requires approving Playit in your browser."))),
                 };
                 if running {
                     let target = dir.clone();
-                    panel.child(button("public-relay-retry", "Retry connection", Kind::Ghost, &t)
+                    panel.child(button("playit-retry", "Retry Playit", Kind::Ghost, &t)
                         .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                             servers::connectivity::start(target.clone(), port);
                             cx.notify();
