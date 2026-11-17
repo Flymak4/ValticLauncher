@@ -348,7 +348,7 @@ fn installed_game_architecture(tag: &str) -> Option<InstalledGameArchitecture> {
     serde_json::from_slice(&fs::read(dir.join(GAME_BUILD_ARCHITECTURE)).ok()?)
         .ok()
         .or_else(|| {
-            let binary = pe_architecture_file(&dir.join(CLIENT))?;
+            let binary = pe_architecture_file(&game_executable_at(&dir))?;
             Some(InstalledGameArchitecture {
                 requested: binary,
                 binary,
@@ -518,6 +518,33 @@ pub(crate) const CLIENT: &str = if cfg!(windows) {
 } else {
     "horizon-client"
 };
+
+/// Cargo builds the game as horizon-client, even when the official Valtic
+/// distribution renames it to valtic-client.exe. Older installed versions
+/// can still contain the original filename. Prefer Valtic's binary where
+/// present, but do not treat a valid older installation as missing.
+pub(crate) fn game_executable_at(dir: &Path) -> PathBuf {
+    let preferred = dir.join(CLIENT);
+    if preferred.is_file() {
+        return preferred;
+    }
+    #[cfg(windows)]
+    {
+        let legacy = dir.join(if CLIENT == "valtic-client.exe" {
+            "horizon-client.exe"
+        } else {
+            "valtic-client.exe"
+        });
+        if legacy.is_file() {
+            return legacy;
+        }
+    }
+    preferred
+}
+
+pub(crate) fn game_executable(tag: &str) -> PathBuf {
+    game_executable_at(&version_dir(tag))
+}
 
 /// The agent `url` is fetched with: the launcher's own user agent, through the player's proxy when
 /// one is set (`proxy`).
@@ -1130,7 +1157,7 @@ pub fn mod_api_level(tag: &str) -> u32 {
     if let Some(&(_, level)) = levels.iter().find(|(t, _)| t == tag) {
         return level;
     }
-    let level = program_mod_api_level(&version_dir(tag).join(CLIENT));
+    let level = program_mod_api_level(&game_executable(tag));
     levels.push((tag.to_owned(), level));
     level
 }
@@ -3088,11 +3115,11 @@ fn client_program(tag: &str) -> PathBuf {
         Ok(program) => return program,
         Err(e) => eprintln!("Starting the game outside {}: {e}", crate::game_app::APP),
     }
-    dir.join(CLIENT)
+    game_executable_at(&dir)
 }
 
 pub fn server_command(tag: &str, folder: &Path) -> Command {
-    let mut cmd = Command::new(version_dir(tag).join(CLIENT));
+    let mut cmd = Command::new(game_executable(tag));
     cmd.current_dir(folder)
         .arg("--resources")
         .arg(resources(tag))
