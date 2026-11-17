@@ -116,7 +116,7 @@ impl Launcher {
         };
         let rules = [
             label(&SOFTWARES, c.software),
-            self.servers.value(Field::JavaVersion).to_string(),
+            if c.software == "rust" { "26.3".to_string() } else { self.servers.value(Field::JavaVersion).to_string() },
             label(&MODES, c.mode),
             label(&DIFFICULTIES, c.difficulty),
             trf(
@@ -211,7 +211,7 @@ impl Launcher {
             .child(
                 ui::text(13., FontWeight::NORMAL, ink::FAINT)
                     .line_height(px(20.))
-                    .child(tr("Choose the software and Minecraft version. Java must be installed. Valtic will download the official server files and install supported mod loaders.")),
+                    .child(tr(if c.software == "rust" { "Recommended: Horizon server written in Rust. Uses a prepared Valtic 26.3 installation, without Java or a JVM memory limit." } else { "Choose the software and Minecraft version. Java must be installed. Valtic will download the official server files and install supported mod loaders." })),
             )
     }
 
@@ -226,7 +226,7 @@ impl Launcher {
         let (mode, difficulty, max) = (c.mode, c.difficulty, c.max_players);
         let (software, ram_gb) = (c.software, c.ram_gb);
         let (voice_chat, geyser) = (c.voice_chat, c.geyser);
-        let can_voice = software != "vanilla";
+        let can_voice = software != "vanilla" && software != "rust";
         let can_geyser = software == "paper";
         // Copy the version choices before creating widgets that mutably borrow self.
         let release_options = c.versions.iter().take(7).cloned().collect::<Vec<_>>();
@@ -261,7 +261,7 @@ impl Launcher {
                         ui::text(14., FontWeight::NORMAL, ink::NOTE)
                             .mt(px(6.))
                             .child(tr(
-                                "Create a real Java Edition server. Valtic installs your selected software.",
+                                "Choose a Java server or the native Rust (Horizon) server. Valtic sets up the selected engine.",
                             )),
                     ),
             )
@@ -552,20 +552,26 @@ impl Launcher {
                     .on_click(set(cx, |c| c.check_accounts = !c.check_accounts)),
             );
 
-        // Pick the actual Java server distribution, not the Horizon game executable.
+        // Horizon's native Rust server is a separate engine from Java mod loaders.
         let loaders = section(
             "Server software".into(),
             None,
-            div().flex().gap(px(10.)).children(SOFTWARES.iter().map(|&(id, label)| {
+            div().flex().flex_wrap().gap(px(10.)).children(SOFTWARES.iter().map(|&(id, label)| {
                 choice(SharedString::from(format!("create-software-{id}")), software == id, &t)
                     .flex_1()
+                    .min_w(px(142.))
                     .p(px(12.))
-                    .child(choice_text(label, "Java Edition".to_string()))
+                    .child(choice_text(
+                        if id == "rust" { "Rust (Horizon)" } else { label },
+                        if id == "rust" {
+                            "★ Recommended · Native Rust · 26.3".to_string()
+                        } else {
+                            "Java Edition".to_string()
+                        },
+                    ))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if let Some(c) = &mut this.servers.create {
-                            c.software = id;
-                            if id == "vanilla" { c.voice_chat = false; }
-                            if id != "paper" { c.geyser = false; }
+                            choose_server_software(c, id);
                         }
                         cx.notify();
                     }))
@@ -583,13 +589,21 @@ impl Launcher {
                         cx.notify();
                     }))
             }));
-        let version = section(
-            "Minecraft version".into(),
-            None,
-            div().flex().flex_col().gap(px(10.))
-                .child(self.field(Field::JavaVersion, "26.3", 400., cx).w_full())
-                .child(version_tiles),
-        );
+        let version = if software == "rust" {
+            section(
+                "Minecraft version".into(),
+                None,
+                ui::card_note("26.3 · Horizon Rust server (currently the only supported version)"),
+            )
+        } else {
+            section(
+                "Minecraft version".into(),
+                None,
+                div().flex().flex_col().gap(px(10.))
+                    .child(self.field(Field::JavaVersion, "26.3", 400., cx).w_full())
+                    .child(version_tiles),
+            )
+        };
         let ram_controls = strip()
             .items_center()
             .child(
@@ -618,7 +632,7 @@ impl Launcher {
                     .child(if can_voice {
                         "Install Simple Voice Chat automatically and create its UDP tunnel. Friends need the matching client mod; Valtic shows them the connection address."
                     } else {
-                        "Requires Paper, Fabric, Forge or NeoForge. Vanilla does not load mods or plugins."
+                        "Choose Paper, Fabric, Forge or NeoForge. Voice chat is not supported on Vanilla or Horizon Rust."
                     })))
             .child(ui::toggle("create-voice-chat", voice_chat && can_voice, self.look.accent, self.look.on_accent, &t)
                 .when(can_voice, |toggle| toggle.on_click(set(cx, |c| c.voice_chat = !c.voice_chat))));
@@ -659,7 +673,8 @@ impl Launcher {
             ))
             .child(loaders)
             .child(version)
-            .child(memory)
+            .when(software != "rust", |d| d.child(memory))
+            .when(software == "rust", |d| d.child(ui::card_note("Rust manages memory natively; the Java RAM slider does not apply. Voice chat and Geyser currently require a supported Java server.")))
             .child(addons)
             .child(world)
             .child(section(tr("Game mode").into(), None, modes))
