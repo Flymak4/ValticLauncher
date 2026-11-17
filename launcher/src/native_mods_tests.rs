@@ -64,13 +64,15 @@ fn a_rebuild_leaves_the_old_builds_mod_data_behind() {
     for own in [
         backend::CLIENT,
         "horizon-client",
-        "horizon-client.exe",
         "valtic-client",
-        "valtic-client.exe",
         ".installed",
         "native-mods.json",
         "native-data",
     ] {
+        assert!(!carried_over(OsStr::new(own), Target::Client), "{own}");
+    }
+    #[cfg(windows)]
+    for own in ["horizon-client.exe", "valtic-client.exe"] {
         assert!(!carried_over(OsStr::new(own), Target::Client), "{own}");
     }
     for kept in ["horizon-ctl", "resources", "LICENSE"] {
