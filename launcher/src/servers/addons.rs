@@ -2,7 +2,6 @@
 //! Downloads only from Modrinth and the official GeyserMC downloads service.
 //! These features require UDP connectivity beyond the Java server's TCP tunnel.
 use super::java::{self, Software};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Read;
