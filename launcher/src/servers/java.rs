@@ -441,10 +441,16 @@ pub fn edit_existing(
         return Err(Problem::plain("Use a server name under 100 characters without line breaks."));
     }
 
-    // Resolve whitelist accounts in an isolated folder first. Never overwrite
-    // existing operators when someone edits who is allowed to join.
+    // A settings-only edit should work without an Internet connection.
+    // Verify whitelist accounts only when their list actually changes.
+    // Never overwrite existing operators when someone edits who can join.
+    let before = super::names(dir, "whitelist.json");
+    let players_changed = spec.friends_only &&
+        (before.len() != spec.players.len()
+            || spec.players.iter().any(|name|
+                !before.iter().any(|old| old.eq_ignore_ascii_case(name))));
     let verified = dir.join(".valtic-edit-players");
-    if spec.friends_only {
+    if players_changed {
         fs::create_dir_all(&verified).map_err(|e| Problem::plain(e.to_string()))?;
         let validated = provision_players(&verified, spec);
         if let Err(err) = validated {
@@ -453,8 +459,17 @@ pub fn edit_existing(
         }
     }
 
-    // Download and verify requested add-ons before changing the server metadata.
-    let result = super::addons::install(dir, software, minecraft_version, addons, log);
+    // Download add-ons only when enabling them or repairing a missing file.
+    // Existing working plugin jars must not force a new Modrinth request.
+    let addon_dir = if software == Software::Paper { "plugins" } else { "mods" };
+    let missing_voice = !dir.join(addon_dir).join("simple-voice-chat.jar").is_file();
+    let missing_geyser = !dir.join("plugins/Geyser-Spigot.jar").is_file()
+        || !dir.join("plugins/floodgate-spigot.jar").is_file();
+    let required = super::addons::Addons {
+        voice_chat: addons.voice_chat && (!meta.voice_chat || missing_voice),
+        geyser: addons.geyser && (!meta.geyser || missing_geyser),
+    };
+    let result = super::addons::install(dir, software, minecraft_version, required, log);
     if let Err(err) = result {
         let _ = fs::remove_dir_all(&verified);
         return Err(Problem::plain(err));
@@ -469,7 +484,7 @@ pub fn edit_existing(
         ("server.whitelist", spec.friends_only.to_string()),
     ];
     set_config(dir, &changes)?;
-    if spec.friends_only {
+    if players_changed {
         fs::copy(verified.join("whitelist.json"), dir.join("whitelist.json"))
             .map_err(|e| Problem::plain(format!("Could not update player list: {e}")))?;
     }
