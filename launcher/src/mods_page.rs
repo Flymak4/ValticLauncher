@@ -865,6 +865,28 @@ impl Launcher {
         if self.mods.busy.is_some() {
             return;
         }
+        // Installation has the same hard compatibility boundary as search.
+        // A direct project link must not bypass the selected instance's engine.
+        let is_mod = known.as_ref().map_or(self.mods.kind == PackKind::Mod, |p| p.kind == PackKind::Mod);
+        if is_mod {
+            let allowed = match self.mods.java.as_ref() {
+                Some(java) if java.loader.is_none() => {
+                    self.mods.message = Some(Err(
+                        "Vanilla does not load mods. Select Fabric, Forge or NeoForge first.".into()
+                    ));
+                    return;
+                }
+                Some(_) => SourceId::Modrinth,
+                None => SourceId::Horizon,
+            };
+            if source != allowed {
+                self.mods.message = Some(Err(format!(
+                    "This instance only accepts {} mods. Select a compatible instance first.",
+                    if allowed == SourceId::Horizon { "native Rust" } else { "Modrinth Java" }
+                )));
+                return;
+            }
+        }
         // The first native mod: the trust notice, before anything is installed.
         let first_native = source == SourceId::Horizon
             && !self.settings.native_mods_noticed
