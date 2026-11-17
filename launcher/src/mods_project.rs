@@ -934,10 +934,23 @@ impl Launcher {
                 None => centered(tr("Loading…"), &t),
                 Some(Err(e)) => notice(e.clone(), &t),
                 Some(Ok(list)) => {
-                    // Only what works on the instance: a native mod's versions that don't stay
-                    // out, said in a line.
+                    // Project details have the same strict compatibility
+                    // filtering as search. A Fabric instance cannot browse
+                    // Forge-only releases of a matching Modrinth project.
+                    let java_target = self.mods.java_for(p.kind).cloned();
                     let shown: Vec<usize> = (0..list.len())
-                        .filter(|&i| !works_on || list[i].fitted.as_ref().is_none_or(|f| f.works))
+                        .filter(|&i| {
+                            let version = &list[i].version;
+                            if let Some(target) = &java_target {
+                                if !version.game_versions.contains(&target.minecraft) {
+                                    return false;
+                                }
+                                if p.kind == PackKind::Mod {
+                                    return version.loaders.iter().any(|l| target.accepts(l));
+                                }
+                            }
+                            !works_on || list[i].fitted.as_ref().is_none_or(|f| f.works)
+                        })
                         .collect();
                     let hidden = list.len() - shown.len();
                     let rows = version_list.column(
