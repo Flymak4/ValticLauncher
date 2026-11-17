@@ -536,27 +536,61 @@ impl Launcher {
         let panel = div().flex().flex_col().gap(px(8.))
             .child(ui::card_heading(tr("Public Java server")));
         match servers::connectivity::current(&dir) {
-            Some(servers::connectivity::Connection::Public { address }) => {
-                let copied = self.internet.copied.as_ref().is_some_and(|(what, at)| {
-                    what == &address && at.elapsed() < Duration::from_secs(2)
-                });
-                let copy_value = address.clone();
-                let copy = ui::icon_button(
-                    "playit-copy",
-                    if copied { "tick-02" } else { "copy-01" },
-                    36., 17., 10., false, &t,
-                ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    copy_to_clipboard(cx, gpui::ClipboardItem::new_string(copy_value.clone()));
-                    this.internet.copied = Some((copy_value.clone(), Instant::now()));
-                    cx.notify();
-                }));
-                panel
-                    .child(ui::card_note(tr("Playit.gg assigned this Java server address. Friends can join with normal Minecraft when the agent is online.")))
-                    .child(div().flex().items_center().justify_between().gap(px(8.))
-                        .child(ui::text(15., FontWeight::MEDIUM, ink::FULL)
-                            .min_w_0().truncate().child(address))
-                        .child(copy))
-                    .child(ui::card_note(tr("Java Edition uses Playit.gg. Bedrock and voice chat use separate UDP tunnels.")))
+            Some(servers::connectivity::Connection::Public {
+                address, voice_address, geyser_address, voice_verified, geyser_verified
+            }) => {
+                let row = |id: &'static str, label: &'static str, value: String,
+                           verified: Option<bool>, this: &Self, cx: &mut Context<Self>| {
+                    let copied = this.internet.copied.as_ref().is_some_and(|(what, at)| {
+                        what == &value && at.elapsed() < Duration::from_secs(2)
+                    });
+                    let copy_value = value.clone();
+                    let copy = ui::icon_button(
+                        id,
+                        if copied { "tick-02" } else { "copy-01" },
+                        34., 16., 10., false, &t,
+                    ).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        copy_to_clipboard(cx, gpui::ClipboardItem::new_string(copy_value.clone()));
+                        this.internet.copied = Some((copy_value.clone(), Instant::now()));
+                        cx.notify();
+                    }));
+                    let mut item = div().flex().flex_col().gap(px(4.))
+                        .child(ui::text(12., FontWeight::MEDIUM, ink::QUIET).child(label))
+                        .child(div().flex().items_center().justify_between().gap(px(8.))
+                            .child(ui::text(15., FontWeight::MEDIUM, ink::FULL)
+                                .min_w_0().truncate().child(value))
+                            .child(copy));
+                    if let Some(verified) = verified {
+                        item = item.child(if verified {
+                            ui::text(12., FontWeight::MEDIUM, ink::FULL)
+                                .text_color(ui::live()).child("✓ Verified · tunnel and server service ready")
+                        } else {
+                            ui::text(12., FontWeight::NORMAL, ink::QUIET)
+                                .child("Checking tunnel and server startup…")
+                        });
+                    }
+                    item
+                };
+                let mut content = panel
+                    .child(ui::card_note(tr("Valtic sets up the Playit agent and creates the required tunnels automatically. The agent must stay running while friends connect.")))
+                    .child(row("playit-copy", "Java Edition · TCP", address, None, self, cx));
+                if let Some(value) = voice_address {
+                    content = content.child(row(
+                        "playit-voice-copy", "Simple Voice Chat · UDP", value,
+                        Some(voice_verified), self, cx
+                    ));
+                } else if servers::java::metadata(&dir).is_ok_and(|m| m.voice_chat) {
+                    content = content.child(ui::card_note(tr("Waiting for the voice chat UDP tunnel.")));
+                }
+                if let Some(value) = geyser_address {
+                    content = content.child(row(
+                        "playit-geyser-copy", "Bedrock · UDP", value,
+                        Some(geyser_verified), self, cx
+                    ));
+                } else if servers::java::metadata(&dir).is_ok_and(|m| m.geyser) {
+                    content = content.child(ui::card_note(tr("Waiting for the Bedrock UDP tunnel.")));
+                }
+                content
             }
             Some(servers::connectivity::Connection::Checking) => panel
                 .child(ui::card_note(tr("Setting up Playit.gg and checking your public Java address. No separate app installation is needed."))),
