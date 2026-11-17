@@ -103,6 +103,7 @@ impl Launcher {
         let Some(c) = self.servers.create.as_ref() else {
             return div().id("create-aside");
         };
+        let editing = c.editing.is_some();
         let typed = self.servers.value(Field::Name).trim().to_string();
         let title = if typed.is_empty() {
             tr("My server").to_string()
@@ -137,14 +138,16 @@ impl Launcher {
             .filter(|_| !c.new_world)
             .and_then(|p| c.worlds.iter().find(|(_, path)| path == p));
         let seed = self.servers.value(Field::Seed).trim().to_string();
-        let origin = match (copy, seed.is_empty()) {
+        let origin = if editing {
+            "Existing world, seed and backups will be preserved".to_string()
+        } else { match (copy, seed.is_empty()) {
             (Some((folder, path)), _) => {
                 let name = c.details.get(path).map_or(folder, |d| &d.0);
                 trf("A copy of {name}", &[("name", name)])
             }
             (None, false) => trf("New world, seed {seed}", &[("seed", &seed)]),
             (None, true) => tr("A new world with a random seed").to_string(),
-        };
+        }};
         // A copied world shows its own icon, else the mode's picture.
         let cover = match copy
             .map(|(_, p)| p.join("icon.png"))
@@ -173,7 +176,8 @@ impl Launcher {
             .overflow_y_scroll()
             .rounded_l(px(radius::MODAL))
             .bg(white(0.035))
-            .child(ui::text(13., FontWeight::MEDIUM, ink::QUIET).child(tr("New server")))
+            .child(ui::text(13., FontWeight::MEDIUM, ink::QUIET)
+                .child(tr(if editing { "Edit server" } else { "New server" })))
             .child(
                 div()
                     .mt(px(24.))
@@ -211,7 +215,13 @@ impl Launcher {
             .child(
                 ui::text(13., FontWeight::NORMAL, ink::FAINT)
                     .line_height(px(20.))
-                    .child(tr(if c.software == "rust" { "Recommended: Horizon server written in Rust. Uses a prepared Valtic 26.3 installation, without Java or a JVM memory limit." } else { "Choose the software and Minecraft version. Java must be installed. Valtic will download the official server files and install supported mod loaders." })),
+                    .child(tr(if editing {
+                        "Settings are saved to this server. To change engine or Minecraft version safely, create a separate server and copy your world."
+                    } else if c.software == "rust" {
+                        "Recommended: Horizon server written in Rust. Uses a prepared Valtic 26.3 installation, without Java or a JVM memory limit."
+                    } else {
+                        "Choose the software and Minecraft version. Java must be installed. Valtic will download the official server files and install supported mod loaders."
+                    })),
             )
     }
 
@@ -221,6 +231,7 @@ impl Launcher {
         let Some(c) = self.servers.create.as_ref() else {
             return div();
         };
+        let editing = c.editing.is_some();
         let (new_world, copy, worlds) = (c.new_world, c.copy.clone(), c.worlds.clone());
         let details = c.details.clone();
         let (mode, difficulty, max) = (c.mode, c.difficulty, c.max_players);
@@ -255,14 +266,16 @@ impl Launcher {
                             .text_size(px(size))
                             .line_height(px(size * 1.25))
                             .text_color(white(ink::FULL))
-                            .child(tr("Create a server")),
+                            .child(tr(if editing { "Edit server setup" } else { "Create a server" })),
                     )
                     .child(
                         ui::text(14., FontWeight::NORMAL, ink::NOTE)
                             .mt(px(6.))
-                            .child(tr(
-                                "Choose a Java server or the native Rust (Horizon) server. Valtic sets up the selected engine.",
-                            )),
+                            .child(tr(if editing {
+                                "Change this server's rules, RAM and optional features. Software, version and world are preserved."
+                            } else {
+                                "Choose a Java server or the native Rust (Horizon) server. Valtic sets up the selected engine."
+                            })),
                     ),
             )
             .child(
@@ -557,24 +570,30 @@ impl Launcher {
             "Server software".into(),
             None,
             div().flex().flex_wrap().gap(px(10.)).children(SOFTWARES.iter().map(|&(id, label)| {
-                choice(SharedString::from(format!("create-software-{id}")), software == id, &t)
-                    .flex_1()
-                    .min_w(px(142.))
-                    .p(px(12.))
-                    .child(choice_text(
-                        if id == "rust" { "Rust (Horizon)" } else { label },
-                        if id == "rust" {
-                            "★ Recommended · Native Rust · 26.3".to_string()
-                        } else {
-                            "Java Edition".to_string()
-                        },
-                    ))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if let Some(c) = &mut this.servers.create {
-                            choose_server_software(c, id);
-                        }
-                        cx.notify();
-                    }))
+                {
+                    let card = choice(SharedString::from(format!("create-software-{id}")), software == id, &t)
+                        .flex_1()
+                        .min_w(px(142.))
+                        .p(px(12.))
+                        .child(choice_text(
+                            if id == "rust" { "Rust (Horizon)" } else { label },
+                            if id == "rust" {
+                                "★ Recommended · Native Rust · 26.3".to_string()
+                            } else {
+                                "Java Edition".to_string()
+                            },
+                        ));
+                    if editing {
+                        card.when(software != id, |card| card.opacity(0.45)).cursor_default()
+                    } else {
+                        card.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if let Some(c) = &mut this.servers.create {
+                                choose_server_software(c, id);
+                            }
+                            cx.notify();
+                        }))
+                    }
+                }
             })),
         );
         let chosen = self.servers.value(Field::JavaVersion).to_owned();
@@ -589,7 +608,12 @@ impl Launcher {
                         cx.notify();
                     }))
             }));
-        let version = if software == "rust" {
+        let version = if editing {
+            section("Minecraft version".into(), None, ui::card_note(
+                format!("{} · Kept unchanged to protect your existing world",
+                    if software == "rust" { "26.3" } else { chosen.as_str() })
+            ))
+        } else if software == "rust" {
             section(
                 "Minecraft version".into(),
                 None,
@@ -676,7 +700,11 @@ impl Launcher {
             .when(software != "rust", |d| d.child(memory))
             .when(software == "rust", |d| d.child(ui::card_note("Rust manages memory natively; the Java RAM slider does not apply. Voice chat and Geyser currently require a supported Java server.")))
             .child(addons)
-            .child(world)
+            .when(!editing, |d| d.child(world))
+            .when(editing, |d| d.child(section(
+                "World".into(), None,
+                ui::card_note("The current world, seed, builds and backups are kept unchanged.")
+            )))
             .child(section(tr("Game mode").into(), None, modes))
             .child(numbers)
             .child(section(tr("Who can join").into(), None, who))
@@ -821,6 +849,7 @@ impl Launcher {
             return div();
         };
         let (eula, missing, creating) = (c.eula, c.eula_missing, self.servers.creating);
+        let editing = c.editing.is_some();
         let look = self.look;
         let tickbox = div()
             .flex()
@@ -872,7 +901,7 @@ impl Launcher {
         // What is happening, between the EULA and the buttons (not in the mockup).
         let status = if creating {
             let last = self.servers.job_log.back().cloned().unwrap_or_default();
-            Some(ui::card_note(format!("{} {last}", tr("Creating…"))).truncate())
+            Some(ui::card_note(format!("{} {last}", tr(if editing { "Saving…" } else { "Creating…" }))).truncate())
         } else if let Some(p) = &self.servers.problem {
             Some(
                 ui::text(13., FontWeight::NORMAL, ink::FULL)
@@ -929,7 +958,7 @@ impl Launcher {
                 .text_color(ui::color(look.on_accent))
                 // The mockup greys it until the EULA is ticked; a press then says why.
                 .when(!eula, |d| d.opacity(0.5))
-                .child(tr("Create server")),
+                .child(tr(if editing { "Save changes" } else { "Create server" })),
             &t,
         );
         let buttons = if creating {
@@ -977,8 +1006,8 @@ impl Launcher {
                     .items_center()
                     .gap(px(12.))
                     .min_w_0()
-                    .child(agree)
-                    .child(read)
+                    .when(!editing, |d| d.child(agree).child(read))
+                    .when(editing, |d| d.child(ui::card_note("Stop the server before saving changes.")))
                     .children(status.map(|s| s.flex_1().min_w_0())),
             )
             .child(buttons)
