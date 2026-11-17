@@ -490,18 +490,37 @@ pub fn monitor(dir: PathBuf, info: TunnelInfo) {
 /// Retry Playit setup for a running Java server.
 pub fn start(dir: PathBuf, _port: u16) {
     thread::spawn(move || {
-        match prepare(&dir) {
-            Ok(info) => {
-                if let Ok(meta) = super::java::metadata(&dir) {
-                    let _ = super::addons::configure_network(
-                        &dir, meta.software, meta.voice_port,
-                        info.voice_address.as_deref(), meta.geyser_port
-                    );
-                }
-                monitor(dir, info);
+        let Ok(info) = prepare(&dir) else { return; };
+        let Ok(meta) = super::java::metadata(&dir) else { return; };
+        if super::java::is_running(&dir) {
+            let _ = super::java::stop(&dir);
+            for _ in 0..150 {
+                if !super::java::is_running(&dir) { break; }
+                thread::sleep(Duration::from_millis(100));
             }
-            Err(_) => {}
+            if super::java::is_running(&dir) {
+                let _ = set(&dir, NEXT_ID.load(Ordering::Relaxed), Connection::Unavailable {
+                    reason: "The server did not stop in time to apply the new UDP tunnel settings. Stop it and retry.".into()
+                });
+                return;
+            }
         }
+        if let Err(reason) = super::addons::configure_network(
+            &dir, meta.software, meta.voice_port,
+            info.voice_address.as_deref(), meta.geyser_port
+        ) {
+            let _ = set(&dir, NEXT_ID.load(Ordering::Relaxed), Connection::Unavailable { reason });
+            return;
+        }
+        if !super::java::is_running(&dir) {
+            if let Err(problem) = super::java::start(&dir) {
+                let _ = set(&dir, NEXT_ID.load(Ordering::Relaxed), Connection::Unavailable {
+                    reason: problem.message
+                });
+                return;
+            }
+        }
+        monitor(dir, info);
     });
 }
 
