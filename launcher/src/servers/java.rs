@@ -403,6 +403,115 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, a
     }
     result.map_err(Problem::plain)
 }
+/// Apply the creation-dialog options to an existing *stopped* Java server.
+/// Worlds, mod folders, plugins not owned by Valtic, and backup files stay put.
+/// Changing server software or Minecraft version requires a separate server:
+/// rewriting an existing world in place is not a safe migration.
+pub fn edit_existing(
+    dir: &Path,
+    spec: &NewServer,
+    software: Software,
+    minecraft_version: &str,
+    ram_gb: u8,
+    addons: super::addons::Addons,
+    log: &dyn Fn(String),
+) -> Result<(), Problem> {
+    let mut meta = metadata(dir).map_err(Problem::plain)?;
+    if is_running(dir) {
+        return Err(Problem::plain("Stop the server before changing its setup."));
+    }
+    if meta.software != software || meta.minecraft_version != minecraft_version {
+        return Err(Problem::plain(
+            "Changing Minecraft version or server software needs a new server. Your existing worlds and plugins have not been changed.",
+        ));
+    }
+    if !(1..=16).contains(&ram_gb) || !(1..=100).contains(&spec.max_players) {
+        return Err(Problem::plain("RAM must be 1–16 GB and player limit must be 1–100."));
+    }
+    if spec.friends_only && !spec.check_accounts {
+        return Err(Problem::plain("Friends-only access needs Minecraft account verification enabled."));
+    }
+    if addons.voice_chat && !super::addons::supports_voice_chat(software) {
+        return Err(Problem::plain("This software does not support Simple Voice Chat."));
+    }
+    if addons.geyser && !super::addons::supports_geyser(software) {
+        return Err(Problem::plain("One-click Geyser and Floodgate currently require Paper."));
+    }
+    if spec.name.contains('\n') || spec.name.contains('\r') || spec.name.len() > 100 {
+        return Err(Problem::plain("Use a server name under 100 characters without line breaks."));
+    }
+
+    // Resolve whitelist accounts in an isolated folder first. Never overwrite
+    // existing operators when someone edits who is allowed to join.
+    let verified = dir.join(".valtic-edit-players");
+    if spec.friends_only {
+        fs::create_dir_all(&verified).map_err(|e| Problem::plain(e.to_string()))?;
+        let validated = provision_players(&verified, spec);
+        if let Err(err) = validated {
+            let _ = fs::remove_dir_all(&verified);
+            return Err(Problem::plain(err));
+        }
+    }
+
+    // Download and verify requested add-ons before changing the server metadata.
+    let result = super::addons::install(dir, software, minecraft_version, addons, log);
+    if let Err(err) = result {
+        let _ = fs::remove_dir_all(&verified);
+        return Err(Problem::plain(err));
+    }
+
+    let changes = [
+        ("server.motd", spec.name.clone()),
+        ("server.max_players", spec.max_players.to_string()),
+        ("world.game_mode", spec.game_mode.clone()),
+        ("world.difficulty", spec.difficulty.clone()),
+        ("server.online_mode", spec.check_accounts.to_string()),
+        ("server.whitelist", spec.friends_only.to_string()),
+    ];
+    set_config(dir, &changes)?;
+    if spec.friends_only {
+        fs::copy(verified.join("whitelist.json"), dir.join("whitelist.json"))
+            .map_err(|e| Problem::plain(format!("Could not update player list: {e}")))?;
+    }
+    let _ = fs::remove_dir_all(verified);
+
+    // Only Valtic-installed add-ons have fixed filenames. Other plugins and
+    // mod jars are never deleted by the settings editor.
+    if !addons.voice_chat {
+        let path = if software == Software::Paper {
+            dir.join("plugins/simple-voice-chat.jar")
+        } else {
+            dir.join("mods/simple-voice-chat.jar")
+        };
+        if path.is_file() { fs::remove_file(path).map_err(|e| Problem::plain(e.to_string()))?; }
+    }
+    if !addons.geyser && software == Software::Paper {
+        for name in ["Geyser-Spigot.jar", "floodgate-spigot.jar"] {
+            let file = dir.join("plugins").join(name);
+            if file.is_file() { fs::remove_file(file).map_err(|e| Problem::plain(e.to_string()))?; }
+        }
+    }
+    if addons.voice_chat && meta.voice_port == 0 {
+        let mut used = super::ports_taken();
+        used.push(meta.port);
+        meta.voice_port = super::free_udp_port(24454, &used);
+    }
+    if addons.geyser && meta.geyser_port == 0 {
+        let mut used = super::ports_taken();
+        used.push(meta.port);
+        if meta.voice_port != 0 { used.push(meta.voice_port); }
+        meta.geyser_port = super::free_udp_port(19132, &used);
+    }
+    meta.ram_gb = ram_gb;
+    meta.voice_chat = addons.voice_chat;
+    meta.geyser = addons.geyser;
+    fs::write(dir.join(META),
+        serde_json::to_vec_pretty(&meta).map_err(|e| Problem::plain(e.to_string()))?)
+        .map_err(|e| Problem::plain(e.to_string()))?;
+    log("Saved Java server setup. Your world, other plugins and backups were preserved.".into());
+    Ok(())
+}
+
 /// Install or repair Simple Voice Chat on an existing Paper server. The server
 /// must be stopped so the plugin files and metadata are consistent at startup.
 /// This is idempotent: pressing Setup again repairs an interrupted installation.
@@ -536,7 +645,9 @@ pub fn config(dir: &Path) -> Option<Value> {
     Some(json!({
         "server": { "port": get("server-port").parse::<u16>().unwrap_or(25565),
                     "max_players": get("max-players").parse::<u32>().unwrap_or(10),
-                    "motd": get("motd") },
+                    "motd": get("motd"),
+                    "online_mode": get("online-mode") == "true",
+                    "whitelist": get("white-list") == "true" },
         "world": { "name": get("level-name"), "game_mode": get("gamemode"),
                    "difficulty": get("difficulty") },
         "panel": { "bind": "" }
@@ -555,6 +666,8 @@ pub fn set_config(dir: &Path, changes: &[(&str, String)]) -> Result<super::Appli
             "server.port" => "server-port",
             "server.max_players" => "max-players",
             "server.motd" => "motd",
+            "server.online_mode" => "online-mode",
+            "server.whitelist" => "white-list",
             "world.game_mode" => "gamemode",
             "world.difficulty" => "difficulty",
             "world.name" => "level-name",
