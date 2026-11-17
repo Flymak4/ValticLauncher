@@ -578,7 +578,9 @@ impl Launcher {
                     content = content.child(row(
                         "playit-voice-copy", "Simple Voice Chat · UDP", value,
                         Some(voice_verified), self, cx
-                    ));
+                    )).child(ui::card_note(tr(
+                        "Java players: install the matching Simple Voice Chat client mod. In game, press V to choose a microphone and set push-to-talk. Bedrock players cannot use this voice chat."
+                    )));
                 } else if servers::java::metadata(&dir).is_ok_and(|m| m.voice_chat) {
                     content = content.child(ui::card_note(tr("Waiting for the voice chat UDP tunnel.")));
                 }
@@ -586,7 +588,9 @@ impl Launcher {
                     content = content.child(row(
                         "playit-geyser-copy", "Bedrock · UDP", value,
                         Some(geyser_verified), self, cx
-                    ));
+                    )).child(ui::card_note(tr(
+                        "Bedrock players: add a server in the Servers tab and enter this address, including its port."
+                    )));
                 } else if servers::java::metadata(&dir).is_ok_and(|m| m.geyser) {
                     content = content.child(ui::card_note(tr("Waiting for the Bedrock UDP tunnel.")));
                 }
