@@ -1538,12 +1538,25 @@ impl Launcher {
     fn mods_installed_list(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let t = self.theme;
         let kind = self.mods.kind;
+        // The installed list follows the same engine boundary as search. Java
+        // mods belong to Java loaders; Rust mods to the native registry. A
+        // Vanilla instance must not display mod jars as usable.
+        let java_loader_present = self.mods.java.as_ref().map(|target| target.loader.is_some());
+        let visible = |e: &installed::Entry| -> bool {
+            if e.kind != kind { return false; }
+            if kind != PackKind::Mod { return true; }
+            match java_loader_present {
+                Some(true) => e.source == SourceId::Modrinth,
+                Some(false) => false,
+                None => e.source == SourceId::Horizon,
+            }
+        };
         // Each project's own icon (Modrinth's, asked for once), at the row's size.
         let ids = self
             .mods
             .installed
             .iter()
-            .filter(|e| e.kind == kind && e.source == SourceId::Modrinth)
+            .filter(|e| visible(e) && e.source == SourceId::Modrinth)
             .map(|e| e.project.clone())
             .collect();
         self.ask_project_icons(ids, cx);
@@ -1552,14 +1565,14 @@ impl Launcher {
             .installed
             .clone()
             .iter()
-            .filter(|e| e.kind == kind)
+            .filter(|e| visible(e))
             .map(|e| self.project_icon(e))
             .collect();
         let entries: Vec<&installed::Entry> = self
             .mods
             .installed
             .iter()
-            .filter(|e| e.kind == kind)
+            .filter(|e| visible(e))
             .collect();
         let native_entries = if kind == PackKind::Mod && self.mods.java.is_none() {
             self.native_files()
