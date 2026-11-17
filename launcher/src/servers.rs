@@ -53,6 +53,8 @@ impl Entry {
 pub mod remote;
 #[path = "servers/java.rs"]
 pub mod java;
+#[path = "servers/addons.rs"]
+pub mod addons;
 #[path = "servers/connectivity.rs"]
 pub mod connectivity;
 
