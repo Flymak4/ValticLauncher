@@ -21,13 +21,6 @@
       "dev.valtic.cosmetics.client.ValticCosmeticsClient"
     ]
   },
-  "mixins": [
-    "valtic_cosmetics.mixins.json",
-    {
-      "config": "valtic_cosmetics.client.mixins.json",
-      "environment": "client"
-    }
-  ],
   "depends": {
     "fabricloader": ">=0.20.1",
     "fabric-api": "*",

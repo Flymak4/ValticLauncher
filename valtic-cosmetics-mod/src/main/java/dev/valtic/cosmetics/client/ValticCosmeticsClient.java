@@ -1,42 +1,40 @@
 package dev.valtic.cosmetics.client;
 
-import dev.valtic.cosmetics.client.model.CosmeticModelLayers;
-import dev.valtic.cosmetics.client.render.CosmeticRenderer;
+import dev.valtic.cosmetics.client.gui.CosmeticsWardrobeScreen;
+import dev.valtic.cosmetics.client.render.CosmeticsLayer;
 import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.rendering.v1.EntityModelLayerRegistry;
-import net.fabricmc.fabric.api.client.rendering.v1.LivingEntityFeatureRendererRegistrationCallback;
-import net.minecraft.client.render.entity.LivingEntityRenderer;
-import net.minecraft.client.render.entity.model.EntityModel;
-import net.minecraft.client.render.entity.state.PlayerEntityRenderState;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.player.PlayerEntity;
+import net.fabricmc.fabric.api.client.rendering.v1.LivingEntityRenderLayerRegistrationCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.ModelLayerRegistry;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.client.screen.v1.Screens;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.PauseScreen;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.renderer.entity.player.AvatarRenderer;
+import net.minecraft.network.chat.Component;
 
-public class ValticCosmeticsClient implements ClientModInitializer {
-
+public final class ValticCosmeticsClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
-        // Register model layer definitions first
-        EntityModelLayerRegistry.registerModelLayer(
-                CosmeticModelLayers.WINGS, dev.valtic.cosmetics.client.model.WingsModel::getTexturedModelData);
-        EntityModelLayerRegistry.registerModelLayer(
-                CosmeticModelLayers.CAPE,  dev.valtic.cosmetics.client.model.CapeModel::getTexturedModelData);
-        EntityModelLayerRegistry.registerModelLayer(
-                CosmeticModelLayers.HAT,   dev.valtic.cosmetics.client.model.HatModel::getTexturedModelData);
-        EntityModelLayerRegistry.registerModelLayer(
-                CosmeticModelLayers.HORNS, dev.valtic.cosmetics.client.model.HornsModel::getTexturedModelData);
+        ModelLayerRegistry.registerModelLayer(CosmeticsLayer.CAPE_LAYER, CosmeticsLayer::capeModel);
+        ModelLayerRegistry.registerModelLayer(CosmeticsLayer.WINGS_LAYER, CosmeticsLayer::wingsModel);
+        ModelLayerRegistry.registerModelLayer(CosmeticsLayer.HAT_LAYER, CosmeticsLayer::hatModel);
+        ModelLayerRegistry.registerModelLayer(CosmeticsLayer.HORNS_LAYER, CosmeticsLayer::hornsModel);
 
-        // Register the feature renderer for the player
-        LivingEntityFeatureRendererRegistrationCallback.EVENT.register(
-                (entityType, entityRenderer, registrationHelper, context) -> {
-                    if (entityType == EntityType.PLAYER) {
-                        @SuppressWarnings("unchecked")
-                        LivingEntityRenderer<PlayerEntity, EntityModel<PlayerEntityRenderState>> playerRenderer =
-                                (LivingEntityRenderer<PlayerEntity, EntityModel<PlayerEntityRenderState>>) entityRenderer;
-                        registrationHelper.register(
-                                new CosmeticRenderer<>(playerRenderer, context)
-                        );
-                    }
-                }
-        );
+        LivingEntityRenderLayerRegistrationCallback.EVENT.register((entityType, renderer, helper, context) -> {
+            if (renderer instanceof AvatarRenderer<?> avatar) {
+                helper.register(new CosmeticsLayer(avatar, context.getModelSet()));
+            }
+        });
+
+        ScreenEvents.AFTER_INIT.register((minecraft, screen, width, height) -> {
+            if (screen instanceof TitleScreen || screen instanceof PauseScreen) {
+                int y = screen instanceof TitleScreen ? Math.min(height - 44, height / 4 + 158) : height - 44;
+                Screens.getWidgets(screen).add(Button.builder(
+                    Component.literal("Valtic Cosmetics"),
+                    button -> minecraft.gui.setScreen(new CosmeticsWardrobeScreen(screen))
+                ).bounds(width / 2 - 100, Math.max(8, y), 200, 20).build());
+            }
+        });
     }
 }

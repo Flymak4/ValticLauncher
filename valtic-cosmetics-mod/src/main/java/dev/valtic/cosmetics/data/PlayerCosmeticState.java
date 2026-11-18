@@ -85,10 +85,10 @@ public class PlayerCosmeticState {
         if (!Files.exists(SAVE_PATH)) return state;
         try (Reader r = Files.newBufferedReader(SAVE_PATH)) {
             JsonObject obj = GSON.fromJson(r, JsonObject.class);
-            if (obj.has("wings"))  state.equippedWings  = obj.get("wings").isJsonNull()  ? null : obj.get("wings").getAsString();
-            if (obj.has("cape"))   state.equippedCape   = obj.get("cape").isJsonNull()   ? null : obj.get("cape").getAsString();
-            if (obj.has("hat"))    state.equippedHat    = obj.get("hat").isJsonNull()    ? null : obj.get("hat").getAsString();
-            if (obj.has("horns"))  state.equippedHorns  = obj.get("horns").isJsonNull()  ? null : obj.get("horns").getAsString();
+            if (obj != null && obj.has("wings"))  state.equippedWings  = obj.get("wings").isJsonNull()  ? null : obj.get("wings").getAsString();
+            if (obj != null && obj.has("cape"))   state.equippedCape   = obj.get("cape").isJsonNull()   ? null : obj.get("cape").getAsString();
+            if (obj != null && obj.has("hat"))    state.equippedHat    = obj.get("hat").isJsonNull()    ? null : obj.get("hat").getAsString();
+            if (obj != null && obj.has("horns"))  state.equippedHorns  = obj.get("horns").isJsonNull()  ? null : obj.get("horns").getAsString();
         } catch (IOException e) {
             LOGGER.error("[Valtic Cosmetics] Failed to load save: {}", e.getMessage());
         }

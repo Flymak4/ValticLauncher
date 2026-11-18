@@ -1,6 +1,6 @@
 package dev.valtic.cosmetics.data;
 
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
 
 /**
  * Describes a single cosmetic item available in the wardrobe.
@@ -15,6 +15,6 @@ public record CosmeticEntry(
     /** Convenience: texture identifier from a simple name under valtic_cosmetics namespace. */
     public static CosmeticEntry of(String id, String name, CosmeticType type, String texturePath, String desc) {
         return new CosmeticEntry(id, name, type,
-                Identifier.of("valtic_cosmetics", texturePath), desc);
+                Identifier.fromNamespaceAndPath("valtic_cosmetics", "textures/" + texturePath + ".png"), desc);
     }
 }
