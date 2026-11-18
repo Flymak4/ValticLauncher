@@ -729,9 +729,9 @@ pub fn set_property(dir: &Path, key: &str, value: &str) -> Result<(), Problem> {
         } else { lines.push(line.to_string()); }
     }
     if !found { return Err(Problem::plain("Property no longer exists. Refresh the tab.")); }
-    let temp = path.with_extension("properties.tmp");
-    fs::write(&temp, lines.join("\n") + "\n").map_err(|e| Problem::plain(e.to_string()))?;
-    fs::rename(&temp, &path).map_err(|e| Problem::plain(e.to_string()))?;
+    // Windows does not allow fs::rename to replace an existing file.
+    // The server is stopped here, so update its existing properties file directly.
+    fs::write(&path, lines.join("\n") + "\n").map_err(|e| Problem::plain(e.to_string()))?;
     Ok(())
 }
 
