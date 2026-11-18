@@ -35,5 +35,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: valtic-cosmetics-preview-fabric-26.3
-          path: cosmetic-preview/build/libs/valtic-cosmetics-preview-0.1.0.jar
+          path: cosmetic-preview/build/libs/valtic-cosmetics-preview-0.2.0.jar
           if-no-files-found: error

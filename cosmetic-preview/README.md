@@ -1,9 +1,9 @@
-# Valtic Cosmetics Preview — Fabric 26.3
+# Valtic Cosmetics Preview v0.2.0
 
-The source is stored in `cosmetic-preview-source.tar.xz`. GitHub Actions automatically builds an installable `.jar` from this source archive.
+The Fabric 26.3 preview is built from `cosmetic-preview-source.tar.xz` by the [Valtic Cosmetics Preview workflow](../../actions/workflows/valtic-cosmetics-preview.yml).
 
-Download the latest build artifact from the [Valtic Cosmetics Preview workflow](../../actions/workflows/valtic-cosmetics-preview.yml). The preview enables all cosmetics for free for testing: wings, cape, hat and horns. It does not include the future paid-entitlement system.
+It includes an original layered-3D wings/cape/crown/horns cosmetic test and a **Cosmetics** button on the Minecraft title and pause menus that opens the locker. Items can be equipped/unequipped individually, and the choices persist across launches. The in-world pause-menu locker provides a live 3D player preview.
 
-In Minecraft Java 26.3 with Fabric API, use `/vcpreview all`, `/vcpreview cape`, `/vcpreview wings`, `/vcpreview hat`, `/vcpreview horns`, or `/vcpreview off`. Press F5 for third-person view.
+Every cosmetic is unlocked **for testing only**. There are no payments, ownership checks, external resource packs, or particles. This Fabric mod is not the native Valtic Rust game: porting the renderer and equip UI into Valtic's Rust client is a separate integration.
 
-For a paid release, use server-verified store purchases (not a toggle stored only in the mod). Human test and review are required before public publishing.
+See the README in the archive for setup and test instructions.
