@@ -183,7 +183,7 @@ pub(super) enum Event {
     Pvp(Option<bool>),
     UpdateCheck(Result<Value, Problem>),
     Failed(String),
-    JavaVersions(Result<Vec<String>, String>),
+    JavaVersions(Result<servers::java::VersionCatalog, String>),
 }
 
 /// The Create dialog's answers.
