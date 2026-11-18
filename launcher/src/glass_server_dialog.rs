@@ -240,7 +240,15 @@ impl Launcher {
         let can_voice = software != "vanilla" && software != "rust";
         let can_geyser = software == "paper";
         // Copy the version choices before creating widgets that mutably borrow self.
-        let release_options = c.versions.iter().take(7).cloned().collect::<Vec<_>>();
+        let version_search = self.servers.value(Field::JavaVersionSearch).trim().to_ascii_lowercase();
+        let total_versions = c.versions.len();
+        let matching_versions = c.versions.iter()
+            .filter(|v| v.to_ascii_lowercase().contains(&version_search)).count();
+        // Render a manageable page of matching tiles; searching reaches the
+        // entire upstream catalogue, including older Minecraft releases.
+        let release_options = c.versions.iter()
+            .filter(|v| v.to_ascii_lowercase().contains(&version_search))
+            .take(60).cloned().collect::<Vec<_>>();
         let (friends_only, check, friends) = (c.friends_only, c.check_accounts, c.friends.clone());
         let creating = self.servers.creating;
         // The mockup's `clamp(1.6rem, 2.4vw, 2.1rem)`.
@@ -587,9 +595,18 @@ impl Launcher {
                         card.when(software != id, |card| card.opacity(0.45)).cursor_default()
                     } else {
                         card.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            let selected = this.servers.value(Field::JavaVersion).to_owned();
+                            let mut replacement = None;
                             if let Some(c) = &mut this.servers.create {
                                 choose_server_software(c, id);
+                                if !c.versions.is_empty() && !c.versions.iter().any(|v| v == &selected) {
+                                    replacement = c.versions.first().cloned();
+                                }
                             }
+                            if let Some(version) = replacement {
+                                this.servers.text(Field::JavaVersion).set(version);
+                            }
+                            this.servers.text(Field::JavaVersionSearch).set(String::new());
                             cx.notify();
                         }))
                     }
@@ -597,7 +614,8 @@ impl Launcher {
             })),
         );
         let chosen = self.servers.value(Field::JavaVersion).to_owned();
-        let version_tiles = div().flex().flex_wrap().gap(px(8.))
+        let version_tiles = div().max_h(px(186.)).overflow_y_scroll()
+            .child(div().flex().flex_wrap().gap(px(8.))
             .children(release_options.into_iter().map(|v| {
                 let active = v == chosen;
                 choice(SharedString::from(format!("create-mc-{}", v)), active, &t)
@@ -607,7 +625,7 @@ impl Launcher {
                         this.servers.text(Field::JavaVersion).set(v.clone());
                         cx.notify();
                     }))
-            }));
+            })));
         let version = if editing {
             section("Minecraft version".into(), None, ui::card_note(
                 format!("{} · Kept unchanged to protect your existing world",
@@ -624,7 +642,10 @@ impl Launcher {
                 "Minecraft version".into(),
                 None,
                 div().flex().flex_col().gap(px(10.))
-                    .child(self.field(Field::JavaVersion, "26.3", 400., cx).w_full())
+                    .child(self.field(Field::JavaVersion, "Selected version", 400., cx).w_full())
+                    .child(self.field(Field::JavaVersionSearch, "Search all compatible versions (e.g. 1.8.9)", 400., cx).w_full())
+                    .child(ui::text(13., FontWeight::NORMAL, ink::QUIET)
+                        .child(format!("{total_versions} supported Minecraft releases · {matching_versions} matching · showing up to 60.")))
                     .child(version_tiles),
             )
         };
