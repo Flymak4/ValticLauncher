@@ -4,7 +4,7 @@ use super::{Entry, NewServer, Problem, Status, World};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -153,12 +153,116 @@ pub(super) fn download(url: &str, dest: &Path, sha1: Option<&str>) -> Result<(),
     }
     result
 }
-pub fn versions() -> Result<Vec<String>, String> {
-    let v = fetch_json(MANIFEST)?;
-    Ok(v["versions"].as_array().ok_or("Invalid version manifest")?
+/// Minecraft releases supported by each server implementation. These are fetched from
+/// the upstream Minecraft and loader projects, not a hard-coded list.
+#[derive(Clone, Debug, Default)]
+pub struct VersionCatalog {
+    pub vanilla: Vec<String>,
+    pub paper: Vec<String>,
+    pub fabric: Vec<String>,
+    pub forge: Vec<String>,
+    pub neoforge: Vec<String>,
+}
+
+impl VersionCatalog {
+    pub fn for_software(&self, software: &str) -> &[String] {
+        match software {
+            "vanilla" => &self.vanilla,
+            "paper" => &self.paper,
+            "fabric" => &self.fabric,
+            "forge" => &self.forge,
+            "neoforge" => &self.neoforge,
+            _ => &[],
+        }
+    }
+}
+
+/// Extract all published Maven coordinates without limiting the number of builds.
+fn maven_versions(xml: &str) -> Vec<&str> {
+    xml.split("<version>").skip(1)
+        .filter_map(|s| s.split_once("</version>").map(|(version, _)| version.trim()))
+        .collect()
+}
+
+fn neoforge_prefix(minecraft: &str) -> Option<String> {
+    let parts: Vec<&str> = minecraft.split('.').collect();
+    if parts.iter().any(|p| p.parse::<u32>().is_err()) {
+        return None;
+    }
+    match parts.as_slice() {
+        ["1", minor] => Some(format!("{minor}.0.")),
+        ["1", minor, patch] => Some(format!("{minor}.{patch}.")),
+        [year, release] => Some(format!("{year}.{release}.0.")),
+        [year, release, patch] => Some(format!("{year}.{release}.{patch}.")),
+        _ => None,
+    }
+}
+
+fn build_order(build: &str) -> Vec<u32> {
+    build.split(|c: char| !c.is_ascii_digit())
+        .filter_map(|part| part.parse::<u32>().ok())
+        .collect()
+}
+
+fn latest_build<'a>(builds: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let builds: Vec<&str> = builds.into_iter().collect();
+    // Prefer actual releases over betas; use betas only if no release exists.
+    let stable = builds.iter().copied()
+        .filter(|build| !build.contains("-beta") && !build.contains("-alpha"))
+        .max_by_key(|build| build_order(build));
+    stable.or_else(|| builds.into_iter().max_by_key(|build| build_order(build)))
+}
+
+pub fn versions() -> Result<VersionCatalog, String> {
+    let manifest = fetch_json(MANIFEST)?;
+    let releases: Vec<String> = manifest["versions"].as_array()
+        .ok_or("Invalid Mojang version manifest")?
         .iter().filter(|item| item["type"] == "release")
         .filter_map(|item| item["id"].as_str().map(str::to_owned))
-        .take(150).collect())
+        .collect();
+    if releases.is_empty() {
+        return Err("Mojang returned no Minecraft releases".into());
+    }
+
+    // Fabric publishes its own supported game list. Matching it to Mojang's
+    // releases keeps snapshots out of the normal Java server picker.
+    let fabric_games: HashSet<String> = fetch_json("https://meta.fabricmc.net/v2/versions/game")
+        .ok().and_then(|data| data.as_array().map(|items| items.iter()
+            .filter_map(|item| item["version"].as_str().map(str::to_owned))
+            .collect())).unwrap_or_default();
+    let forge_builds = fetch_text(
+        "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml"
+    ).map(|xml| maven_versions(&xml).iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let neo_builds = fetch_text(
+        "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
+    ).map(|xml| maven_versions(&xml).iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    // NeoForge 1.20.1 used a differently named Maven artifact.
+    let old_neo_builds = fetch_text(
+        "https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml"
+    ).map(|xml| maven_versions(&xml).iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    Ok(VersionCatalog {
+        vanilla: releases.clone(),
+        // Paper availability is validated against Paper's actual stable builds
+        // when installing; do not silently replace a selected version.
+        paper: releases.clone(),
+        fabric: releases.iter().filter(|v| fabric_games.contains(*v)).cloned().collect(),
+        forge: releases.iter().filter(|v| {
+            let prefix = format!("{v}-");
+            forge_builds.iter().any(|build| build.starts_with(&prefix))
+        }).cloned().collect(),
+        neoforge: releases.iter().filter(|v| {
+            if v.as_str() == "1.20.1" {
+                old_neo_builds.iter().any(|build| build.starts_with("1.20.1-"))
+            } else {
+                neoforge_prefix(v).is_some_and(|prefix|
+                    neo_builds.iter().any(|build| build.starts_with(&prefix)))
+            }
+        }).cloned().collect(),
+    })
 }
 fn validate_version(version: &str) -> Result<Value, String> {
     if version.len() > 40 || !version.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) {
@@ -238,34 +342,50 @@ fn install(software: Software, version: &str, dir: &Path, log: &dyn Fn(String)) 
             Ok((Launch::Jar("server.jar".into()), Some(loader.into())))
         }
         Software::Forge => {
-            let promos = fetch_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")?;
-            let build = promos["promos"][format!("{version}-recommended")].as_str()
-                .or_else(|| promos["promos"][format!("{version}-latest")].as_str())
-                .ok_or_else(|| format!("Forge is not available for Minecraft {version}"))?;
+            let xml = fetch_text("https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml")?;
+            let prefix = format!("{version}-");
+            let published: Vec<&str> = maven_versions(&xml).into_iter()
+                .filter_map(|build| build.strip_prefix(&prefix)).collect();
+            let promos = fetch_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json").ok();
+            let recommended = promos.as_ref().and_then(|data|
+                data["promos"][format!("{version}-recommended")].as_str()
+                .or_else(|| data["promos"][format!("{version}-latest")].as_str()));
+            let build = recommended.filter(|build| published.contains(build))
+                .or_else(|| latest_build(published.iter().copied()))
+                .ok_or_else(|| format!("Forge has no published build for Minecraft {version}"))?;
             let release = format!("{version}-{build}");
             let url = format!("https://maven.minecraftforge.net/net/minecraftforge/forge/{release}/forge-{release}-installer.jar");
             log(format!("Installing Forge {release}"));
             download(&url, &dir.join("installer.jar"), None)?;
             run_installer(dir, log)?;
-            let args = find_args(dir, "net/minecraftforge/forge", &release)
-                .ok_or("Forge did not create the required launch arguments.")?;
-            Ok((Launch::Argfile(args), Some(build.into())))
+            let launch = find_args(dir, "net/minecraftforge/forge", &release)
+                .map(Launch::Argfile)
+                .or_else(|| find_legacy_forge_jar(dir, &release).map(Launch::Jar))
+                .ok_or("Forge did not produce server launch arguments or a legacy server jar.")?;
+            Ok((launch, Some(build.into())))
         }
         Software::Neoforge => {
-            let xml = fetch_text("https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml")?;
-            let prefix = if let Some(rest) = version.strip_prefix("1.") { rest } else { version };
-            let prefix = format!("{prefix}.");
-            let builds: Vec<&str> = xml.split("<version>").skip(1)
-                .filter_map(|s| s.split_once("</version>").map(|v| v.0))
-                .filter(|v| v.starts_with(&prefix)).collect();
-            let build = builds.last().ok_or_else(|| format!("NeoForge has no release for Minecraft {version}"))?;
-            let url = format!("https://maven.neoforged.net/releases/net/neoforged/neoforge/{build}/neoforge-{build}-installer.jar");
+            let old = version == "1.20.1";
+            let (artifact, prefix) = if old {
+                ("forge", "1.20.1-".to_owned())
+            } else {
+                ("neoforge", neoforge_prefix(version)
+                    .ok_or_else(|| format!("NeoForge does not support version {version}"))?)
+            };
+            let group = format!("net/neoforged/{artifact}");
+            let xml = fetch_text(&format!(
+                "https://maven.neoforged.net/releases/{group}/maven-metadata.xml"
+            ))?;
+            let build = latest_build(maven_versions(&xml).into_iter()
+                .filter(|build| build.starts_with(&prefix)))
+                .ok_or_else(|| format!("NeoForge has no published build for Minecraft {version}"))?;
+            let url = format!("https://maven.neoforged.net/releases/{group}/{build}/{artifact}-{build}-installer.jar");
             log(format!("Installing NeoForge {build}"));
             download(&url, &dir.join("installer.jar"), None)?;
             run_installer(dir, log)?;
-            let args = find_args(dir, "net/neoforged/neoforge", build)
+            let args = find_args(dir, &group, build)
                 .ok_or("NeoForge did not create the required launch arguments.")?;
-            Ok((Launch::Argfile(args), Some((*build).into())))
+            Ok((Launch::Argfile(args), Some(build.into())))
         }
     }
 }
@@ -291,6 +411,17 @@ fn find_args(dir: &Path, path: &str, release: &str) -> Option<String> {
         None
     }
 }
+/// Before Forge 1.17, installers could create a runnable server jar rather
+/// than the modern JVM argument files.
+fn find_legacy_forge_jar(dir: &Path, release: &str) -> Option<String> {
+    for name in [format!("forge-{release}.jar"), format!("forge-{release}-universal.jar")] {
+        if dir.join(&name).is_file() {
+            return Some(name);
+        }
+    }
+    None
+}
+
 fn properties(spec: &NewServer, port: u16) -> String {
     let name: String = spec.name.chars().map(|c| if ['\n', '\r', '=', '\\'].contains(&c) { ' ' } else { c }).collect();
     let seed = match &spec.world { World::New { seed } => seed.as_str(), _ => "" }
@@ -803,6 +934,16 @@ pub fn set_config(dir: &Path, changes: &[(&str, String)]) -> Result<super::Appli
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn catalog_parsers_cover_older_and_modern_versions() {
+        assert_eq!(neoforge_prefix("1.21.1").as_deref(), Some("21.1."));
+        assert_eq!(neoforge_prefix("26.3").as_deref(), Some("26.3.0."));
+        assert_eq!(neoforge_prefix("1.20.2").as_deref(), Some("20.2."));
+        assert_eq!(latest_build(["47.3.0", "47.4.10", "47.4.9"]), Some("47.4.10"));
+        assert_eq!(latest_build(["21.1.20-beta", "21.1.10"]), Some("21.1.10"));
+        assert_eq!(maven_versions("<versions><version>1.8.9-11.15.1</version><version>26.3-66.1.0</version></versions>"),
+            vec!["1.8.9-11.15.1", "26.3-66.1.0"]);
+    }
     #[test]
     fn parses_loader_names_and_safe_launch_args() {
         assert_eq!(Software::parse("neoforge"), Some(Software::Neoforge));
