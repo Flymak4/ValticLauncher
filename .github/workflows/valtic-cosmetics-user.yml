@@ -1,10 +1,9 @@
 name: Build Valtic Cosmetics (Fabric 26.3)
-
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'valtic-cosmetics-input.tar.xz'
+      - 'valtic-cosmetics-mod/**'
       - '.github/workflows/valtic-cosmetics-user.yml'
 
 jobs:
@@ -21,13 +20,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.8.0'
-      - name: Unpack user cosmetics source
-        run: |
-          mkdir -p valtic-cosmetics-mod
-          tar -xJf valtic-cosmetics-input.tar.xz -C valtic-cosmetics-mod
-      - name: Compile Fabric 26.3 mod
+      - name: Compile Valtic Cosmetics Fabric 26.3
         working-directory: valtic-cosmetics-mod
-        run: gradle build --no-daemon --stacktrace
+        run: gradle build --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: valtic-cosmetics-fabric-26.3

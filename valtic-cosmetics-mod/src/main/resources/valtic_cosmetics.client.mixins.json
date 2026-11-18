@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "dev.valtic.cosmetics.mixin.client",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MixinTitleScreen",
+    "MixinGameMenuScreen"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
