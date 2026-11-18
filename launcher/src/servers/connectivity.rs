@@ -239,7 +239,7 @@ fn server_tag(dir: &Path) -> String {
 
 fn find_tunnel(data: &Value, name: &str, port: u16, port_type: &str) -> Option<String> {
     data["tunnels"].as_array()?.iter().find_map(|tunnel| {
-        if tunnel["name"].as_str() != Some(name)
+        if (!name.is_empty() && tunnel["name"].as_str() != Some(name))
             || tunnel["port_type"].as_str() != Some(port_type)
             || tunnel["disabled_reason"].is_string()
         {
@@ -295,7 +295,8 @@ fn create_tunnel(
 
 fn ensure_java_tunnel(key: &str, run_data: &Value, dir: &Path, port: u16) -> Result<(), String> {
     let name = format!("Valtic {} Java", server_tag(dir));
-    if find_tunnel(run_data, &name, port, "tcp").is_some() {
+    // Reuse manually created Playit tunnels; users may have named them differently.
+    if find_tunnel(run_data, "", port, "tcp").is_some() {
         return Ok(());
     }
     let tunnels = request(key, "/v1/tunnels/list", json!({}))?;
@@ -317,7 +318,8 @@ fn ensure_udp_tunnel(
     description: &str,
 ) -> Result<(), String> {
     let name = format!("Valtic {} {suffix}", server_tag(dir));
-    if find_tunnel(run_data, &name, port, "udp").is_some() {
+    // An existing UDP tunnel for this local port works regardless of its dashboard name.
+    if find_tunnel(run_data, "", port, "udp").is_some() {
         return Ok(());
     }
     let tunnels = request(key, "/v1/tunnels/list", json!({}))?;
@@ -358,10 +360,12 @@ pub fn prepare(dir: &Path) -> Result<TunnelInfo, String> {
         let initial = request(&key, "/v1/agents/rundata", json!({}))?;
         ensure_java_tunnel(&key, &initial, dir, meta.port)?;
         if meta.voice_chat {
-            ensure_udp_tunnel(&key, &initial, dir, meta.voice_port, "Voice", "Valtic Simple Voice Chat UDP")?;
+            // Playit may refuse tunnel creation with an agent key (HTTP 401).
+            // Do not invalidate an already working Java tunnel if only UDP setup failed.
+            let _ = ensure_udp_tunnel(&key, &initial, dir, meta.voice_port, "Voice", "Valtic Simple Voice Chat UDP");
         }
         if meta.geyser {
-            ensure_udp_tunnel(&key, &initial, dir, meta.geyser_port, "Bedrock", "Valtic Geyser Bedrock UDP")?;
+            let _ = ensure_udp_tunnel(&key, &initial, dir, meta.geyser_port, "Bedrock", "Valtic Geyser Bedrock UDP");
         }
 
         let deadline = std::time::Instant::now() + Duration::from_secs(45);
@@ -371,21 +375,19 @@ pub fn prepare(dir: &Path) -> Result<TunnelInfo, String> {
             }
             let data = request(&key, "/v1/agents/rundata", json!({}))?;
             let java_address = find_tunnel(
-                &data, &format!("Valtic {} Java", server_tag(dir)), meta.port, "tcp"
+                &data, "", meta.port, "tcp"
             );
             let voice_address = if meta.voice_chat {
-                find_tunnel(&data, &format!("Valtic {} Voice", server_tag(dir)), meta.voice_port, "udp")
+                find_tunnel(&data, "", meta.voice_port, "udp")
             } else { None };
             let geyser_address = if meta.geyser {
-                find_tunnel(&data, &format!("Valtic {} Bedrock", server_tag(dir)), meta.geyser_port, "udp")
+                find_tunnel(&data, "", meta.geyser_port, "udp")
             } else { None };
 
             if let Some(java_address) = java_address {
-                if (!meta.voice_chat || voice_address.is_some())
-                    && (!meta.geyser || geyser_address.is_some())
-                {
-                    return Ok(TunnelInfo { java_address, voice_address, geyser_address });
-                }
+                // Java reachability is independent of optional UDP tunnels.
+                // Voice/Geyser stay unverified until those separate tunnels exist.
+                return Ok(TunnelInfo { java_address, voice_address, geyser_address });
             }
             if std::time::Instant::now() >= deadline {
                 return Err("Playit created the tunnel, but it has not become active yet. Check your Playit account and retry.".into());
@@ -459,13 +461,13 @@ pub fn monitor(dir: PathBuf, info: TunnelInfo) {
                 }
             };
             let java_ok = find_tunnel(
-                &data, &format!("Valtic {} Java", server_tag(&dir)), meta.port, "tcp"
+                &data, "", meta.port, "tcp"
             ).is_some();
             let voice_tunnel_ok = !meta.voice_chat || find_tunnel(
-                &data, &format!("Valtic {} Voice", server_tag(&dir)), meta.voice_port, "udp"
+                &data, "", meta.voice_port, "udp"
             ).is_some();
             let geyser_tunnel_ok = !meta.geyser || find_tunnel(
-                &data, &format!("Valtic {} Bedrock", server_tag(&dir)), meta.geyser_port, "udp"
+                &data, "", meta.geyser_port, "udp"
             ).is_some();
             let log = fs::read_to_string(dir.join("logs/valtic-console.log")).unwrap_or_default();
             let (voice_config_ok, geyser_config_ok) = super::addons::network_config_matches(
@@ -548,5 +550,7 @@ mod tests {
         assert_eq!(find_tunnel(&data, "Valtic test Java", 25565, "tcp").as_deref(), Some("java.example:25565"));
         assert_eq!(find_tunnel(&data, "Valtic test Voice", 24454, "udp").as_deref(), Some("voice.example:30111"));
         assert_eq!(find_tunnel(&data, "Valtic test Voice", 24454, "tcp"), None);
+        assert_eq!(find_tunnel(&data, "", 25565, "tcp").as_deref(), Some("java.example:25565"));
+        assert_eq!(find_tunnel(&data, "", 24454, "udp").as_deref(), Some("voice.example:30111"));
     }
 }
