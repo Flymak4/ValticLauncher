@@ -162,7 +162,11 @@ pub fn configure_network(
             dir.join("config/voicechat/voicechat-server.properties")
         };
         set_property(&path, "port", &voice_port.to_string())?;
-        set_property(&path, "voice_host", voice_host.unwrap_or(""))?;
+        // Do not overwrite a working public UDP address when Playit's API is unavailable.
+        if let Some(host) = voice_host.filter(|host| !host.trim().is_empty()) {
+            set_property(&path, "bind_address", "")?;
+            set_property(&path, "voice_host", host)?;
+        }
     }
     if geyser_port > 0 {
         configure_geyser(&dir.join("plugins/Geyser-Spigot/config.yml"), geyser_port)?;
@@ -242,6 +246,19 @@ pub fn install(dir: &Path, software: Software, version: &str, addons: Addons, lo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn missing_udp_tunnel_preserves_configured_voice_host() {
+        let dir = std::env::temp_dir().join(format!("valtic-voice-host-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        configure_network(&dir, Software::Paper, 24454, Some("voice.example:43122"), 0).unwrap();
+        configure_network(&dir, Software::Paper, 24454, None, 0).unwrap();
+        let content = std::fs::read_to_string(dir.join("plugins/voicechat/voicechat-server.properties")).unwrap();
+        assert!(content.lines().any(|s| s == "port=24454"));
+        assert!(content.lines().any(|s| s == "bind_address="));
+        assert!(content.lines().any(|s| s == "voice_host=voice.example:43122"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn unsupported_software_is_not_offered_addons() {
         assert!(!supports_voice_chat(Software::Vanilla));

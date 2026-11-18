@@ -572,17 +572,34 @@ impl Launcher {
                     item
                 };
                 let mut content = panel
-                    .child(ui::card_note(tr("Valtic sets up the Playit agent and creates the required tunnels automatically. The agent must stay running while friends connect.")))
+                    .child(ui::card_note(tr("Valtic runs the Playit agent and detects your tunnels. Playit may require new tunnels to be created in its dashboard because agent keys can be read-only.")))
                     .child(row("playit-copy", "Java Edition · TCP", address, None, self, cx));
                 if let Some(value) = voice_address {
                     content = content.child(row(
                         "playit-voice-copy", "Simple Voice Chat · UDP", value,
                         Some(voice_verified), self, cx
                     )).child(ui::card_note(tr(
-                        "Java players: install the matching Simple Voice Chat client mod. In game, press V to choose a microphone and set push-to-talk. Bedrock players cannot use this voice chat."
+                        "Java players need the matching Simple Voice Chat client mod. In game, press V to choose a microphone. Bedrock players cannot use this mod."
                     )));
-                } else if servers::java::metadata(&dir).is_ok_and(|m| m.voice_chat) {
-                    content = content.child(ui::card_note(tr("Waiting for the voice chat UDP tunnel.")));
+                }
+                if let Ok(meta) = servers::java::metadata(&dir) {
+                    if meta.voice_chat && !voice_verified {
+                        let target = dir.clone();
+                        content = content
+                            .child(ui::card_note(format!(
+                                "To enable voice chat, create a separate Playit tunnel: type MC: Simple Voice Chat, local IP 127.0.0.1, local UDP port {}. After creating it, apply the tunnel below.",
+                                meta.voice_port
+                            )))
+                            .child(button("playit-open-voice-setup", "Create voice tunnel on Playit", Kind::Secondary, &t)
+                                .on_click(|_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                                    cx.open_url("https://playit.gg/account/setup/new-tunnel");
+                                }))
+                            .child(button("playit-apply-voice-setup", "Apply voice tunnel and restart", Kind::Secondary, &t)
+                                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                    servers::connectivity::start(target.clone(), port);
+                                    cx.notify();
+                                })));
+                    }
                 }
                 if let Some(value) = geyser_address {
                     content = content.child(row(
@@ -626,6 +643,15 @@ impl Launcher {
                     _ => panel
                         .child(ui::card_note(tr("Press Start to host through Playit.gg. First-time setup requires approving Playit in your browser."))),
                 };
+                let panel = if servers::java::metadata(&dir).is_ok_and(|m| m.voice_chat) {
+                    panel.child(ui::card_note(tr(
+                        "If Minecraft works but voice does not, create an MC: Simple Voice Chat UDP tunnel on the same Playit agent and retry."
+                    )))
+                        .child(button("playit-open-tunnels", "Open Playit tunnels", Kind::Secondary, &t)
+                            .on_click(|_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                                cx.open_url("https://playit.gg/account/tunnels");
+                            }))
+                } else { panel };
                 if running {
                     let target = dir.clone();
                     panel.child(button("playit-retry", "Retry Playit", Kind::Ghost, &t)

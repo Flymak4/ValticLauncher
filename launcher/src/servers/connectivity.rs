@@ -463,15 +463,18 @@ pub fn monitor(dir: PathBuf, info: TunnelInfo) {
             let java_ok = find_tunnel(
                 &data, "", meta.port, "tcp"
             ).is_some();
-            let voice_tunnel_ok = !meta.voice_chat || find_tunnel(
-                &data, "", meta.voice_port, "udp"
-            ).is_some();
-            let geyser_tunnel_ok = !meta.geyser || find_tunnel(
-                &data, "", meta.geyser_port, "udp"
-            ).is_some();
+            // A tunnel may be added after the server was launched, so refresh endpoints.
+            let voice_address = if meta.voice_chat {
+                find_tunnel(&data, "", meta.voice_port, "udp")
+            } else { None };
+            let geyser_address = if meta.geyser {
+                find_tunnel(&data, "", meta.geyser_port, "udp")
+            } else { None };
+            let voice_tunnel_ok = !meta.voice_chat || voice_address.is_some();
+            let geyser_tunnel_ok = !meta.geyser || geyser_address.is_some();
             let log = fs::read_to_string(dir.join("logs/valtic-console.log")).unwrap_or_default();
             let (voice_config_ok, geyser_config_ok) = super::addons::network_config_matches(
-                &dir, meta.software, meta.voice_port, info.voice_address.as_deref(), meta.geyser_port
+                &dir, meta.software, meta.voice_port, voice_address.as_deref(), meta.geyser_port
             );
             let voice_loaded = log.contains("Voice chat server started");
             let geyser_loaded = log.contains("Geyser-Spigot")
@@ -489,8 +492,8 @@ pub fn monitor(dir: PathBuf, info: TunnelInfo) {
             }
             let _ = set(&dir, id, Connection::Public {
                 address: info.java_address.clone(),
-                voice_address: info.voice_address.clone(),
-                geyser_address: info.geyser_address.clone(),
+                voice_address,
+                geyser_address,
                 voice_verified,
                 geyser_verified,
             });
@@ -504,6 +507,11 @@ pub fn start(dir: PathBuf, _port: u16) {
     thread::spawn(move || {
         let Ok(info) = prepare(&dir) else { return; };
         let Ok(meta) = super::java::metadata(&dir) else { return; };
+        if meta.voice_chat && info.voice_address.is_none() && super::java::is_running(&dir) {
+            // No new UDP endpoint to apply; avoid an unnecessary server restart.
+            monitor(dir, info);
+            return;
+        }
         if super::java::is_running(&dir) {
             let _ = super::java::stop(&dir);
             for _ in 0..150 {
