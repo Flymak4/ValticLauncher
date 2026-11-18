@@ -102,6 +102,12 @@ fn download_agent() -> Result<PathBuf, String> {
     let directory = backend::data_dir().join("playit");
     fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     let destination = directory.join("playit.exe");
+    let marker = directory.join("version.txt");
+    if destination.is_file() && fs::read_to_string(&marker)
+        .is_ok_and(|version| !version.trim().is_empty())
+    {
+        return Ok(destination);
+    }
     let release: Value = http_client().get(RELEASES).set("User-Agent", USER_AGENT)
         .call().map_err(|e| format!("Cannot check Playit.gg releases: {e}"))?
         .into_json().map_err(|e| format!("Invalid Playit release metadata: {e}"))?;
@@ -117,11 +123,7 @@ fn download_agent() -> Result<PathBuf, String> {
         .and_then(|s| s.strip_prefix("sha256:"))
         .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or("Playit agent has no SHA-256 verification data")?;
-    let marker = directory.join("version.txt");
-    if destination.is_file() && fs::read_to_string(&marker).ok().as_deref() == Some(version) {
-        // A cached exe was already verified when it was downloaded.
-        return Ok(destination);
-    }
+    // A previously verified cached executable was already handled above.
     if asset["size"].as_u64().is_some_and(|n| n > MAX_AGENT_SIZE) {
         return Err("Playit agent download is unexpectedly large".into());
     }

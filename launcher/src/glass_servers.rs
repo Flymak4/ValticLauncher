@@ -11,9 +11,10 @@ use horizon_theme::glass::{fill, ink, radius};
 const SIDE: f32 = 320.;
 
 /// The tabs under the server's glass: the mockup shows the Overview's parts on the page itself.
-const LOWER_TABS: [(Tab, &str); 3] = [
+const LOWER_TABS: [(Tab, &str); 4] = [
     (Tab::Players, "Players"),
     (Tab::Settings, "Settings"),
+    (Tab::Properties, "Properties"),
     (Tab::Backups, "Backups"),
 ];
 
@@ -186,6 +187,21 @@ impl Launcher {
             ui::icon_button("server-folder", "folder-01", 32., 17., 10., false, &t)
                 .on_click(move |_, _, cx| crate::glass_toast::open(cx, &folder)),
         );
+        // The glass UI previously hid the existing one-click repair button.
+        if java_host && servers::java::metadata(dir).ok()
+            .is_some_and(|meta| meta.software == servers::java::Software::Paper)
+        {
+            let repair = ui::quiet("server-repair-voice", "Repair voice chat", 32., &t)
+                .px(px(10.));
+            corner = corner.child(if idle {
+                repair.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.setup_paper_voice_chat();
+                    cx.notify();
+                }))
+            } else {
+                repair.opacity(0.4).cursor_default()
+            });
+        }
         // Start, or Restart and Stop.
         let mut buttons = div().flex().flex_none().items_center().gap(px(8.));
         let wait = |b: Stateful<Div>| b.opacity(0.4).cursor_default();
@@ -801,7 +817,7 @@ impl Launcher {
             .flex()
             .items_center()
             .gap(px(4.))
-            .children(LOWER_TABS.iter().map(|&(tab, label)| {
+            .children(LOWER_TABS.iter().filter(|&&(tab, _)| tab != Tab::Properties || servers::java::is_java(dir)).map(|&(tab, label)| {
                 ui::tab(
                     SharedString::from(format!("server-tab-{label}")),
                     tr(label),
@@ -814,9 +830,10 @@ impl Launcher {
                     cx.notify();
                 }))
             }));
-        let players = !matches!(self.servers.tab, Tab::Settings | Tab::Backups);
+        let players = matches!(self.servers.tab, Tab::Players | Tab::Overview);
         let body = match self.servers.tab {
             Tab::Settings => self.settings_tab(status, cx),
+            Tab::Properties => self.server_properties_tab(dir, status, cx),
             Tab::Backups => self.backups_tab(status, cx),
             _ => self.players_tab(dir, status, cx),
         };

@@ -558,6 +558,36 @@ pub fn enable_voice_chat(dir: &Path, log: &dyn Fn(String)) -> Result<(), Problem
     Ok(())
 }
 
+
+pub fn ensure_voice_chat(dir: &Path, log: &dyn Fn(String)) -> Result<(), Problem> {
+    let mut meta = metadata(dir).map_err(Problem::plain)?;
+    if !meta.voice_chat { return Ok(()); }
+    if is_running(dir) {
+        return Err(Problem::plain("Stop the Java server before repairing voice chat."));
+    }
+    let plugin = if meta.software == Software::Paper {
+        dir.join("plugins/simple-voice-chat.jar")
+    } else {
+        dir.join("mods/simple-voice-chat.jar")
+    };
+    if !plugin.is_file() || fs::metadata(&plugin).is_ok_and(|m| m.len() == 0) {
+        log("Voice chat is enabled but its plugin is missing; installing it automatically.".into());
+        super::addons::install(
+            dir, meta.software, &meta.minecraft_version,
+            super::addons::Addons { voice_chat: true, geyser: false }, log
+        ).map_err(Problem::plain)?;
+    }
+    if meta.voice_port == 0 {
+        let mut used = super::ports_taken();
+        used.push(meta.port);
+        meta.voice_port = super::free_udp_port(24454, &used);
+        fs::write(dir.join(META),
+            serde_json::to_vec_pretty(&meta).map_err(|e| Problem::plain(e.to_string()))?)
+            .map_err(|e| Problem::plain(e.to_string()))?;
+    }
+    Ok(())
+}
+
 fn launch_args(meta: &Metadata) -> Vec<String> {
     let mut args = vec!["-Xms1G".to_string(), format!("-Xmx{}G", meta.ram_gb)];
     match &meta.launch {
@@ -654,6 +684,57 @@ pub fn logs(dir: &Path, since: u64) -> Option<(u64, Vec<String>)> {
     let lines = data[..complete].lines().map(str::to_owned).collect();
     Some((offset + complete as u64, lines))
 }
+
+const SETUP_ONLY_PROPERTIES: &[&str] = &[
+    "server-port", "server-ip", "level-name", "level-seed",
+    "online-mode", "white-list", "enforce-whitelist",
+    "enable-rcon", "rcon.password", "rcon.port", "query.port",
+];
+
+pub fn property_editable(key: &str) -> bool {
+    !SETUP_ONLY_PROPERTIES.contains(&key)
+        && !key.is_empty()
+        && key.bytes().all(|c| c.is_ascii_alphanumeric() || b".-_".contains(&c))
+}
+
+pub fn list_properties(dir: &Path) -> Result<Vec<(String, String)>, String> {
+    if !is_java(dir) { return Err("Only Java servers have server.properties.".into()); }
+    let content = fs::read_to_string(dir.join("server.properties")).map_err(|e| e.to_string())?;
+    Ok(content.lines()
+        .filter_map(|line| {
+            let (key, value) = line.trim().split_once('=')?;
+            let key = key.trim();
+            (!key.is_empty() && !key.starts_with('#'))
+                .then(|| (key.to_string(), value.to_string()))
+        }).collect())
+}
+
+/// Updates exactly one allowlisted-to-edit Java property, preserving comments and
+/// other settings. Never changes the world folder, port or account security behind
+/// the existing setup/whitelist controls.
+pub fn set_property(dir: &Path, key: &str, value: &str) -> Result<(), Problem> {
+    if !is_java(dir) { return Err(Problem::plain("Not a Java server.")); }
+    if is_running(dir) { return Err(Problem::plain("Stop the server before editing properties.")); }
+    if !property_editable(key) { return Err(Problem::plain("Change this option in Edit server setup.")); }
+    if value.len() > 500 || value.contains('\n') || value.contains('\r') || value.contains('\0') {
+        return Err(Problem::plain("Property values must be one line and at most 500 characters."));
+    }
+    let path = dir.join("server.properties");
+    let old = fs::read_to_string(&path).map_err(|e| Problem::plain(e.to_string()))?;
+    let mut found = false;
+    let mut lines = Vec::new();
+    for line in old.lines() {
+        if line.split_once('=').is_some_and(|(name, _)| name.trim() == key) {
+            if !found { lines.push(format!("{key}={value}")); found = true; }
+        } else { lines.push(line.to_string()); }
+    }
+    if !found { return Err(Problem::plain("Property no longer exists. Refresh the tab.")); }
+    let temp = path.with_extension("properties.tmp");
+    fs::write(&temp, lines.join("\n") + "\n").map_err(|e| Problem::plain(e.to_string()))?;
+    fs::rename(&temp, &path).map_err(|e| Problem::plain(e.to_string()))?;
+    Ok(())
+}
+
 pub fn config(dir: &Path) -> Option<Value> {
     let p = fs::read_to_string(dir.join("server.properties")).ok()?;
     let get = |k: &str| -> String {

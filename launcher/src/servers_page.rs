@@ -61,6 +61,7 @@ pub(super) enum Field {
     /// Home's memory row (`launch_page.rs`).
     MemoryLimit,
     DeleteServer,
+    ServerPropertyValue,
     /// Settings' accent as hex (`themes_page.rs`).
     AccentHex,
     /// The Shop's gift recipient (`wardrobe_page/shop/basket.rs`).
@@ -68,7 +69,7 @@ pub(super) enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 25] = [
+    const ALL: [Field; 26] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -92,6 +93,7 @@ impl Field {
         Field::PostExit,
         Field::MemoryLimit,
         Field::DeleteServer,
+        Field::ServerPropertyValue,
         Field::AccentHex,
         Field::ShopGift,
     ];
@@ -102,13 +104,15 @@ pub(super) enum Tab {
     Overview,
     Players,
     Settings,
+    Properties,
     Backups,
 }
 
-const TABS: [(Tab, &str); 4] = [
+const TABS: [(Tab, &str); 5] = [
     (Tab::Overview, "Overview"),
     (Tab::Players, "Players"),
     (Tab::Settings, "Settings"),
+    (Tab::Properties, "Properties"),
     (Tab::Backups, "Backups"),
 ];
 
@@ -284,6 +288,7 @@ pub(super) struct Servers {
     backups: Vec<Backup>,
     confirm_restore: Option<String>,
     confirm_delete: bool,
+    property_key: Option<String>,
     service: Option<bool>,
     update: Option<Value>,
     /// `update --check` is under way.
@@ -334,6 +339,7 @@ impl Servers {
             backups: Vec::new(),
             confirm_restore: None,
             confirm_delete: false,
+            property_key: None,
             service: None,
             update: None,
             checking: false,
@@ -496,6 +502,7 @@ fn uptime(secs: u64) -> String {
 /// Starting locally still succeeds, but the UI must never claim remote voice
 /// chat is ready when the UDP tunnel could not be created.
 fn launch_java_with_playit(dir: &Path) -> Result<String, Problem> {
+    servers::java::ensure_voice_chat(dir, &|_line| {})?;
     let meta = servers::java::metadata(dir).map_err(Problem::plain)?;
     let tunnels = servers::connectivity::prepare(dir);
     servers::addons::configure_network(
@@ -510,7 +517,7 @@ fn launch_java_with_playit(dir: &Path) -> Result<String, Problem> {
             Ok(note)
         }
         Err(reason) => Err(Problem::plain(format!(
-            "{note}. The server is running locally, but public Playit access is not ready: {reason} Voice chat will need its UDP tunnel before players outside your network can hear each other."
+            "{note}. The server is running. Playit's API could not confirm or manage the tunnel: {reason} If an existing Playit address works, it may still be reachable. Remote voice chat needs its own UDP tunnel."
         ))),
     }
 }
@@ -599,6 +606,8 @@ impl Launcher {
         s.note = None;
         s.confirm_restore = None;
         s.confirm_delete = false;
+        s.property_key = None;
+        s.texts.remove(&Field::ServerPropertyValue);
         s.texts.remove(&Field::DeleteServer);
         s.restart_needed.clear();
         s.texts.remove(&Field::Motd);
@@ -1432,6 +1441,7 @@ impl Launcher {
                             | Field::Token
                             | Field::AddPlayer
                             | Field::DeleteServer
+                            | Field::ServerPropertyValue
                     ),
                     |d| d.h(px(36.)).px(px(12.)).rounded(px(radius::CONTROL)),
                 )
@@ -1489,6 +1499,7 @@ impl Launcher {
                                 | Field::Token
                                 | Field::AddPlayer
                                 | Field::DeleteServer
+                                | Field::ServerPropertyValue
                         );
                         d.child(crate::glass_ui::focus_ring(if small {
                             radius::CONTROL
@@ -1619,6 +1630,7 @@ impl Launcher {
             | Field::ConsoleSearch
             | Field::DeleteServer
             | Field::AccentHex => {}
+            Field::ServerPropertyValue => self.save_server_property(),
             Field::PreLaunch | Field::Wrapper | Field::LaunchEnv | Field::PostExit => {
                 self.save_launch()
             }
@@ -2189,6 +2201,7 @@ impl Launcher {
             Tab::Overview => self.overview_tab(&status, cx),
             Tab::Players => self.players_tab(dir, &status, cx),
             Tab::Settings => self.settings_tab(&status, cx),
+            Tab::Properties => self.server_properties_tab(dir, &status, cx),
             Tab::Backups => self.backups_tab(&status, cx),
         };
         page.child(body)
@@ -2818,6 +2831,82 @@ impl Launcher {
         .into_any_element()
     }
 
+
+    /// Browse and safely edit a Java server's full server.properties file without
+    /// recreating the world. Sensitive setup properties stay in the setup dialog.
+    fn server_properties_tab(&mut self, dir: &Path, status: &Status, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        if !servers::java::is_java(dir) {
+            return div().child(text(theme::UI).text_color(t.muted)
+                .child("server.properties applies to Java servers. Use Settings for Rust servers."));
+        }
+        let properties = match servers::java::list_properties(dir) {
+            Ok(properties) => properties,
+            Err(err) => return div().child(text(theme::UI).text_color(t.danger).child(err)),
+        };
+        let can_edit = !status.running() && self.servers.busy.is_none();
+        let mut page = div().flex().flex_col().gap(px(10.))
+            .child(text(theme::UI).text_color(t.ink).child("Server Properties"))
+            .child(text(theme::CAPTION).text_color(t.muted).child(
+                "Edit Java server.properties here. Stop the server first; changes apply on the next start. Ports, world names and account access are managed in Edit server setup."
+            ));
+        if let Some(key) = self.servers.property_key.clone() {
+            let save = button("server-property-save", "Save property", Kind::Primary, &t);
+            let save = if can_edit {
+                save.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.save_server_property();
+                    cx.notify();
+                }))
+            } else { disabled(save) };
+            page = page.child(div().flex().flex_col().gap(px(8.))
+                .child(text(theme::CAPTION).text_color(t.muted).child(format!("Editing: {key}")))
+                .child(div().flex().items_center().gap(px(8.))
+                    .child(self.field(Field::ServerPropertyValue, "Property value", 290., cx))
+                    .child(save)
+                    .child(button("server-property-cancel", "Cancel", Kind::Ghost, &t)
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.servers.property_key = None;
+                            cx.notify();
+                        }))));
+        }
+        for (index, (key, value)) in properties.into_iter().enumerate() {
+            let allowed = servers::java::property_editable(&key) && can_edit;
+            let edit = button(
+                SharedString::from(format!("server-property-edit-{index}")),
+                "Edit", Kind::Secondary, &t
+            );
+            let edit = if allowed {
+                let target = key.clone();
+                let current = value.clone();
+                edit.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.servers.property_key = Some(target.clone());
+                    this.servers.text(Field::ServerPropertyValue).set(current.clone());
+                    this.focus_handle(Field::ServerPropertyValue, cx);
+                    this.servers.focus_soon = Some(Field::ServerPropertyValue);
+                    cx.notify();
+                }))
+            } else { disabled(edit) };
+            page = page.child(self.setting_row(
+                &key,
+                if servers::java::property_editable(&key) { value }
+                else { format!("{value} (change in Edit server setup)") },
+                edit.into_any_element()
+            ));
+        }
+        page
+    }
+
+    fn save_server_property(&mut self) {
+        let Some(dir) = self.servers.open.clone() else { return; };
+        let Some(key) = self.servers.property_key.clone() else { return; };
+        let value = self.servers.value(Field::ServerPropertyValue).to_string();
+        self.server_job("Saving server property", move |_log| {
+            servers::java::set_property(&dir, &key, &value)?;
+            Ok(format!("Saved {key}. It will apply when the server next starts."))
+        });
+        self.servers.property_key = None;
+    }
+
     fn settings_tab(&mut self, status: &Status, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let edit = button("edit-server-setup", "Edit server setup", Kind::Primary, &t)
@@ -2840,7 +2929,8 @@ impl Launcher {
                     ))))
                 .child(text(theme::CAPTION).text_color(t.muted).child(
                     "Stop the server before saving. Manage operators and whitelisted players on the Players tab."
-                ));
+                ))
+                .child(self.delete_server_section(status, cx));
         }
         // The glass look draws no rules between rows, as the mockup.
         let rule = if t.glass {

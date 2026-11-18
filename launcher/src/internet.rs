@@ -619,7 +619,7 @@ impl Launcher {
                 let running = servers::java::is_running(&dir);
                 let panel = match state {
                     Some(servers::connectivity::Connection::Unavailable { reason }) => panel
-                        .child(ui::card_note(tr("Playit.gg is not connected. Friends cannot join from outside your network yet.")))
+                        .child(ui::card_note(tr("Valtic could not verify Playit through its API. An existing working Playit address may still be reachable.")))
                         .child(ui::card_note(reason)),
                     _ if running => panel
                         .child(ui::card_note(tr("Playit.gg has not connected to this server."))),
