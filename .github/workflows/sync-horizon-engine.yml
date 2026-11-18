@@ -188,8 +188,8 @@ jobs:
           workspaces: |
             .
             launcher
-      - name: Compile the Valtic restricted guest game
-        run: cargo build --release --locked --package horizon-client --bin horizon-client
+      - name: Compile the Valtic game executable
+        run: cargo build --release --locked --bin horizon-client
       - name: Compile Valtic Launcher against updated engine
         working-directory: launcher
         run: cargo build --release --locked --bin valtic-launcher
