@@ -2867,7 +2867,7 @@ impl Launcher {
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.servers.property_key = None;
                             cx.notify();
-                        }))));
+                        })))));
         }
         for (index, (key, value)) in properties.into_iter().enumerate() {
             let allowed = servers::java::property_editable(&key) && can_edit;
