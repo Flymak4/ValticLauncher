@@ -3633,7 +3633,11 @@ impl Launcher {
         let version_choices = div().flex().flex_wrap().gap(px(6.))
             .children(visible_versions.into_iter().map(|version| {
                 let active = version == chosen_version;
-                choice(SharedString::from(format!("std-server-version-{version}")), active, &t)
+                div().id(SharedString::from(format!("std-server-version-{version}")))
+                    .flex().items_center().cursor_pointer()
+                    .rounded(px(9.)).border_1()
+                    .border_color(if active { t.accent } else { t.rule })
+                    .bg(if active { t.plate_soft } else { t.surface })
                     .px(px(12.)).py(px(8.))
                     .child(text(theme::CAPTION).text_color(t.ink).child(version.clone()))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
