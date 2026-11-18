@@ -614,7 +614,7 @@ impl Launcher {
             })),
         );
         let chosen = self.servers.value(Field::JavaVersion).to_owned();
-        let version_tiles = div().max_h(px(186.)).overflow_y_scroll()
+        let version_tiles = div().id("glass-server-version-scroll").max_h(px(186.)).overflow_y_scroll()
             .child(div().flex().flex_wrap().gap(px(8.))
             .children(release_options.into_iter().map(|v| {
                 let active = v == chosen;
