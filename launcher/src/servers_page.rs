@@ -1654,6 +1654,7 @@ impl Launcher {
             | Field::InstanceGroup
             | Field::InstanceVersion
             | Field::JavaVersion
+            | Field::JavaVersionSearch
             | Field::InstanceModsFilter
             | Field::ConsoleSearch
             | Field::DeleteServer
@@ -3649,7 +3650,7 @@ impl Launcher {
             .child(self.field(Field::JavaVersionSearch, "Search all Minecraft versions", 400., cx))
             .child(text(theme::CAPTION).text_color(t.muted)
                 .child(format!("{total_versions} supported versions · {matching_versions} matching (showing up to 60).")))
-            .child(div().max_h(px(180.)).overflow_y_scroll().child(version_choices));
+            .child(div().id("std-server-version-scroll").max_h(px(180.)).overflow_y_scroll().child(version_choices));
         let world_kind = segments(
             "create-world",
             &[("new", "New world"), ("copy", "Copy one of my worlds")],
