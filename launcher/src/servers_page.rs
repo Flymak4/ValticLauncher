@@ -46,6 +46,8 @@ pub(super) enum Field {
     /// Its search in Mojang's versions (`new_instance.rs`).
     InstanceVersion,
     JavaVersion,
+    /// Search across all supported Java server versions without a fixed shortlist.
+    JavaVersionSearch,
     /// Home's Mods tab's filter (`instance_mods.rs`).
     InstanceModsFilter,
     /// Home's Multiplayer section's (`multiplayer_page.rs`).
@@ -69,7 +71,7 @@ pub(super) enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 26] = [
+    const ALL: [Field; 27] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -83,6 +85,7 @@ impl Field {
         Field::InstanceGroup,
         Field::InstanceVersion,
         Field::JavaVersion,
+        Field::JavaVersionSearch,
         Field::InstanceModsFilter,
         Field::ServerName,
         Field::ServerAddress,
@@ -134,6 +137,7 @@ const SOFTWARES: [(&str, &str); 6] = [
 /// Keep optional add-ons compatible when the player changes server software.
 fn choose_server_software(create: &mut Create, software: &'static str) {
     create.software = software;
+    create.versions = create.catalog.for_software(software).to_vec();
     // Paper's one-click voice chat is enabled when selected. The optional
     // toggle remains available if a player wants a server without voice.
     if software == "paper" {
@@ -198,6 +202,7 @@ pub(super) struct Create {
     voice_chat: bool,
     geyser: bool,
     versions: Vec<String>,
+    catalog: servers::java::VersionCatalog,
     difficulty: &'static str,
     max_players: u32,
     friends_only: bool,
@@ -853,15 +858,27 @@ impl Launcher {
                 true
             }
             Event::JavaVersions(result) => {
+                let selected = s.value(Field::JavaVersion).to_owned();
                 if let Some(create) = &mut s.create {
+                    let mut replacement = None;
                     if create.editing.is_none() {
                         match result {
-                            Ok(versions) => create.versions = versions,
+                            Ok(catalog) => {
+                                create.versions = catalog.for_software(create.software).to_vec();
+                                create.catalog = catalog;
+                                if !create.versions.is_empty()
+                                    && !create.versions.iter().any(|v| v == &selected)
+                                {
+                                    replacement = create.versions.first().cloned();
+                                }
+                            }
                             Err(e) => s.problem = Some(Problem::plain(format!("Couldn't load Minecraft versions: {e}"))),
                         }
                     }
-                    // Editing does not need to reach Mojang for version choices:
-                    // software and version are fixed for this existing world.
+                    if let Some(version) = replacement {
+                        s.text(Field::JavaVersion).set(version);
+                    }
+                    // Editing preserves the Minecraft version of the existing world.
                     true
                 } else {
                     false
@@ -1132,6 +1149,7 @@ impl Launcher {
         self.servers.selected = (!glass).then_some(Field::Name);
         self.servers.text(Field::Seed).set(String::new());
         self.servers.text(Field::JavaVersion).set("26.3".to_string());
+        self.servers.text(Field::JavaVersionSearch).set(String::new());
         self.servers
             .text(Field::Players)
             .set(if glass { String::new() } else { own.clone() });
@@ -1164,6 +1182,7 @@ impl Launcher {
             voice_chat: false,
             geyser: false,
             versions: Vec::new(),
+            catalog: Default::default(),
             difficulty: "normal",
             max_players: 10,
             friends_only: true,
@@ -1377,6 +1396,15 @@ impl Launcher {
         let native_tag = if native_rust { self.selected().cloned() } else { None };
         let software = servers::java::Software::parse(c.software).unwrap_or(servers::java::Software::Vanilla);
         let minecraft_version = self.servers.value(Field::JavaVersion).trim().to_string();
+        if !native_rust && !c.versions.is_empty()
+            && !c.versions.iter().any(|v| v == &minecraft_version)
+        {
+            self.servers.problem = Some(Problem::plain(format!(
+                "{minecraft_version} isn't published for {}. Choose one of the supported versions shown.",
+                c.software
+            )));
+            return;
+        }
         let ram_gb = c.ram_gb;
         let addons = servers::addons::Addons { voice_chat: c.voice_chat, geyser: c.geyser };
         let tx = self.servers.tx.clone();
@@ -3564,8 +3592,16 @@ impl Launcher {
             let weak = weak.clone();
             move |value: &'static str, _: &mut Window, cx: &mut App| {
                 let _ = weak.update(cx, |this, cx| {
+                    let selected = this.servers.value(Field::JavaVersion).to_owned();
+                    let mut replacement = None;
                     if let Some(c) = &mut this.servers.create {
                         f(c, value);
+                        if !c.versions.is_empty() && !c.versions.iter().any(|v| v == &selected) {
+                            replacement = c.versions.first().cloned();
+                        }
+                    }
+                    if let Some(version) = replacement {
+                        this.servers.text(Field::JavaVersion).set(version);
                     }
                     cx.notify();
                 });
@@ -3586,6 +3622,30 @@ impl Launcher {
                 pick(choose_server_software),
             ).into_any_element()
         };
+        let query = self.servers.value(Field::JavaVersionSearch).trim().to_ascii_lowercase();
+        let total_versions = c.versions.len();
+        let matching_versions = c.versions.iter()
+            .filter(|v| v.to_ascii_lowercase().contains(&query)).count();
+        let visible_versions = c.versions.iter()
+            .filter(|v| v.to_ascii_lowercase().contains(&query))
+            .take(60).cloned().collect::<Vec<_>>();
+        let chosen_version = self.servers.value(Field::JavaVersion).to_owned();
+        let version_choices = div().flex().flex_wrap().gap(px(6.))
+            .children(visible_versions.into_iter().map(|version| {
+                let active = version == chosen_version;
+                choice(SharedString::from(format!("std-server-version-{version}")), active, &t)
+                    .px(px(12.)).py(px(8.))
+                    .child(text(theme::CAPTION).text_color(t.ink).child(version.clone()))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.servers.text(Field::JavaVersion).set(version.clone());
+                        cx.notify();
+                    }))
+            }));
+        let version_browser = div().flex().flex_col().gap(px(8.))
+            .child(self.field(Field::JavaVersionSearch, "Search all Minecraft versions", 400., cx))
+            .child(text(theme::CAPTION).text_color(t.muted)
+                .child(format!("{total_versions} supported versions · {matching_versions} matching (showing up to 60).")))
+            .child(div().max_h(px(180.)).overflow_y_scroll().child(version_choices));
         let world_kind = segments(
             "create-world",
             &[("new", "New world"), ("copy", "Copy one of my worlds")],
@@ -3877,6 +3937,9 @@ impl Launcher {
                 } else {
                     self.field(Field::JavaVersion, "26.3", 400., cx).into_any_element()
                 },
+            ))
+            .when(!editing && software != "rust", |d| d.child(
+                row("Browse available versions", version_browser.into_any_element())
             ))
             .when(software != "rust", |d| d.child(row("Maximum RAM", memory.into_any_element())))
             .when(software == "rust", |d| d.child(row(
