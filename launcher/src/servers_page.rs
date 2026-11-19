@@ -2141,7 +2141,7 @@ impl Launcher {
         };
         let kill = big(button(
             "server-kill",
-            if self.servers.confirm_kill { "Confirm Kill" } else { "Kill" },
+            if self.servers.confirm_kill { tr("Confirm Kill") } else { tr("Kill") },
             Kind::Secondary,
             &t,
         ));
@@ -2176,6 +2176,16 @@ impl Launcher {
             .child(start)
             .child(restart)
             .child(kill)
+            .when(self.servers.confirm_kill, |d| {
+                d.child(
+                    button("server-cancel-kill", tr("Cancel"), Kind::Ghost, &t)
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.servers.confirm_kill = false;
+                            this.servers.note = None;
+                            cx.notify();
+                        })),
+                )
+            })
             .child(panel)
             .child(
                 button("server-folder", "Open the folder", Kind::Ghost, &t)
