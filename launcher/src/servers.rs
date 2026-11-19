@@ -996,6 +996,24 @@ fn service_suffix(dir: &Path) -> String {
     }
 }
 
+/// Force-stop a native Rust server. New supervisors support an explicit kill
+/// endpoint; older installed binaries understand a second stop request while
+/// stopping as a request to kill the engine immediately.
+pub fn kill(dir: &Path) -> Result<String, Problem> {
+    let api = Api::open(dir)
+        .ok_or_else(|| Problem::plain("The server control API is unavailable. Cannot force-kill this server."))?;
+    if api.call("POST", "/api/v1/kill", None).is_ok() {
+        return Ok("Server kill requested. Unsaved world changes may be lost.".into());
+    }
+    api.call("POST", "/api/v1/stop", None)
+        .map_err(|e| Problem::plain(format!("Could not contact the server to force-stop it: {e}")))?;
+    std::thread::sleep(Duration::from_millis(150));
+    // An old supervisor kills the game on a second stop while it is stopping.
+    // A quick graceful exit may close the API first; that is also a success.
+    let _ = api.call("POST", "/api/v1/stop", None);
+    Ok("Server force-stop requested. Unsaved world changes may be lost.".into())
+}
+
 // ----- The running server: its control API -------------------------------------------------------
 
 /// The running supervisor's control API (`.horizon/api.json`: its address and token).
