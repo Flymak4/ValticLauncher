@@ -241,6 +241,17 @@ impl Launcher {
             } else {
                 wait(kill)
             });
+            if self.servers.confirm_kill {
+                buttons = buttons.child(
+                    ui::quiet("server-cancel-kill", tr("Cancel"), 44., &t)
+                        .px(px(10.))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.servers.confirm_kill = false;
+                            this.servers.note = None;
+                            cx.notify();
+                        })),
+                );
+            }
         } else {
             let look = self.look;
             let start = keyboard(
