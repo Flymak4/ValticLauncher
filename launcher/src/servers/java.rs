@@ -1107,7 +1107,7 @@ mod tests {
         assert_eq!(Software::parse("unknown"), None);
         let m = Metadata {
             software: Software::Fabric, minecraft_version: "1.21.1".into(),
-            loader_version: None, ram_gb: 4, port: 25565,
+            loader_version: None, ram_gb: 4, java_executable: String::new(), port: 25565,
             voice_chat: false, geyser: false, voice_port: 0, geyser_port: 0,
             launch: Launch::Jar("server.jar".into()),
         };
@@ -1124,7 +1124,7 @@ mod tests {
         let meta = Metadata {
             software: Software::Paper,
             minecraft_version: "26.3".into(),
-            loader_version: None, ram_gb: 4, port: 25565,
+            loader_version: None, ram_gb: 4, java_executable: String::new(), port: 25565,
             voice_chat: false, geyser: false, voice_port: 0, geyser_port: 0,
             launch: Launch::Jar("server.jar".into()),
         };
