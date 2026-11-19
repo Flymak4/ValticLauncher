@@ -720,6 +720,15 @@ impl Launcher {
             ))
             .child(loaders)
             .child(version)
+            .when(software != "rust", |d| d.child(section(
+                tr("Java version").into(),
+                None,
+                div().flex().flex_col().gap(px(10.))
+                    .child(ui::card_note(tr(
+                        "Choose which Java runs this server. Minecraft 1.21.1 needs Java 21; newer versions may need Java 25."
+                    )))
+                    .child(self.server_java_picker(cx)),
+            )))
             .when(software != "rust", |d| d.child(memory))
             .when(software == "rust", |d| d.child(ui::card_note("Rust manages memory natively; the Java RAM slider does not apply. Voice chat and Geyser currently require a supported Java server.")))
             .child(addons)

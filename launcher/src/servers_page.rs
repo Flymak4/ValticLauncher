@@ -1435,8 +1435,10 @@ impl Launcher {
             } else {
                 (|| {
                     servers::java::validate_java_executable(&java_executable)?;
-                    let entry = servers::java::create(&spec, software, &minecraft_version, ram_gb, addons, &log)?;
-                    servers::java::set_java_executable(&entry.dir, &java_executable)?;
+                    let entry = servers::java::create_with_java(
+                        &spec, software, &minecraft_version, ram_gb, addons,
+                        &java_executable, &log,
+                    )?;
                     Ok(entry)
                 })()
             };

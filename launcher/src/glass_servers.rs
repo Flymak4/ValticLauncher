@@ -257,6 +257,19 @@ impl Launcher {
             });
         }
 
+        // Put Java selection beside Start/Stop so owners do not have to hunt
+        // through the tabs below the console.
+        if java_host {
+            buttons = buttons.child(
+                ui::quiet("server-change-java", tr("Change Java"), 44., &t)
+                    .px(px(14.))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.open_edit_server(cx);
+                        cx.notify();
+                    })),
+            );
+        }
+
         let mut glass = glass::plate(radius::PANEL)
             .flex()
             .flex_col()

@@ -340,7 +340,7 @@ fn validate_version(version: &str) -> Result<Value, String> {
     }
     fetch_json(url)
 }
-fn install(software: Software, version: &str, dir: &Path, log: &dyn Fn(String)) -> Result<(Launch, Option<String>), String> {
+fn install(software: Software, version: &str, dir: &Path, java_executable: &str, log: &dyn Fn(String)) -> Result<(Launch, Option<String>), String> {
     let version_meta = validate_version(version)?;
     match software {
         Software::Vanilla => {
@@ -419,7 +419,7 @@ fn install(software: Software, version: &str, dir: &Path, log: &dyn Fn(String)) 
             let url = format!("https://maven.minecraftforge.net/net/minecraftforge/forge/{release}/forge-{release}-installer.jar");
             log(format!("Installing Forge {release}"));
             download(&url, &dir.join("installer.jar"), None)?;
-            run_installer(dir, log)?;
+            run_installer(dir, java_executable, log)?;
             let launch = find_args(dir, "net/minecraftforge/forge", &release)
                 .map(Launch::Argfile)
                 .or_else(|| find_legacy_forge_jar(dir, &release).map(Launch::Jar))
@@ -444,7 +444,7 @@ fn install(software: Software, version: &str, dir: &Path, log: &dyn Fn(String)) 
             let url = format!("https://maven.neoforged.net/releases/{group}/{build}/{artifact}-{build}-installer.jar");
             log(format!("Installing NeoForge {build}"));
             download(&url, &dir.join("installer.jar"), None)?;
-            run_installer(dir, log)?;
+            run_installer(dir, java_executable, log)?;
             let args = find_args(dir, &group, build)
                 .ok_or("NeoForge did not create the required launch arguments.")?;
             Ok((Launch::Argfile(args), Some(build.into())))
@@ -480,8 +480,8 @@ fn install(software: Software, version: &str, dir: &Path, log: &dyn Fn(String)) 
         }
     }
 }
-fn run_installer(dir: &Path, log: &dyn Fn(String)) -> Result<(), String> {
-    let status = crate::process::command("java").current_dir(dir)
+fn run_installer(dir: &Path, java_executable: &str, log: &dyn Fn(String)) -> Result<(), String> {
+    let status = crate::process::command(java_program(java_executable)).current_dir(dir)
         .args(["-jar", "installer.jar", "--installServer"])
         .stdout(Stdio::piped()).stderr(Stdio::piped())
         .output().map_err(|e| format!("Java is required to install this server: {e}"))?;
@@ -569,21 +569,31 @@ fn provision_players(dir: &Path, spec: &NewServer) -> Result<(), String> {
     }
     Ok(())
 }
+/// Create using system Java for callers that do not choose a runtime.
 pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, addons: super::addons::Addons, log: &dyn Fn(String)) -> Result<Entry, Problem> {
+    create_with_java(spec, software, version, ram_gb, addons, "", log)
+}
+
+/// Use the selected executable for installation as well as subsequent server starts.
+pub fn create_with_java(spec: &NewServer, software: Software, version: &str, ram_gb: u8, addons: super::addons::Addons, java_executable: &str, log: &dyn Fn(String)) -> Result<Entry, Problem> {
     if !spec.eula {
         return Err(Problem::plain("You must accept the Minecraft EULA to create a server."));
     }
     if !(1..=16).contains(&ram_gb) {
         return Err(Problem::plain("Server RAM must be between 1 and 16 GB."));
     }
-    crate::process::command("java").arg("-version").output()
-        .map_err(|_| Problem::plain("Install a compatible Java runtime and add java to PATH before creating a server."))?;
+    validate_java_executable(java_executable)?;
+    let check = crate::process::command(java_program(java_executable)).arg("-version").output()
+        .map_err(|e| Problem::plain(format!("Cannot start the selected Java runtime: {e}")))?;
+    if !check.status.success() {
+        return Err(Problem::plain("The selected Java runtime did not start successfully."));
+    }
     let name = if spec.name.trim().is_empty() { "My server" } else { spec.name.trim() };
     let dir = super::new_folder(name);
     fs::create_dir_all(&dir).map_err(|e| Problem::plain(e.to_string()))?;
     let result = (|| -> Result<Entry, String> {
         let port = super::free_port(25565, &super::ports_taken());
-        let (launch, loader_version) = install(software, version, &dir, log)?;
+        let (launch, loader_version) = install(software, version, &dir, java_executable, log)?;
         if software == Software::Arclight {
             fs::create_dir_all(dir.join("mods")).map_err(|e| e.to_string())?;
             fs::create_dir_all(dir.join("plugins")).map_err(|e| e.to_string())?;
@@ -611,7 +621,7 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, a
             minecraft_version: version.into(),
             loader_version,
             ram_gb,
-            java_executable: String::new(),
+            java_executable: java_executable.trim().trim_matches('"').to_string(),
             port,
             voice_chat: addons.voice_chat,
             geyser: addons.geyser,
@@ -834,10 +844,13 @@ pub fn detected_java_runtimes() -> Vec<(String, PathBuf)> {
         if !path.is_file() || !seen.insert(path.to_string_lossy().to_lowercase()) {
             return;
         }
-        let label = path.parent().and_then(Path::parent)
-            .and_then(Path::file_name)
+        let home = path.parent().and_then(Path::parent);
+        let folder = home.and_then(Path::file_name)
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Java".to_string());
+        let label = home.and_then(crate::java::release_version)
+            .map(|(version, major)| format!("Java {major} ({version}) · {folder}"))
+            .unwrap_or(folder);
         results.push((label, path));
     };
     if let Some(home) = std::env::var_os("JAVA_HOME") {
@@ -864,7 +877,16 @@ pub fn detected_java_runtimes() -> Vec<(String, PathBuf)> {
             add(install.path().join("bin").join(executable));
         }
     }
+    // Also offer Minecraft's own installed runtimes, not just system JDKs.
+    for runtime in crate::java::mojang_runtimes(&crate::java::runtimes_dir()) {
+        add(runtime.home.join("bin").join(executable));
+    }
     results
+}
+
+fn java_program(value: &str) -> &str {
+    let selected = value.trim().trim_matches('"');
+    if selected.is_empty() { "java" } else { selected }
 }
 
 /// Validate a per-server runtime without modifying the machine-wide Java selection.
@@ -912,11 +934,7 @@ pub fn start(dir: &Path) -> Result<String, Problem> {
         .map_err(|e| Problem::plain(e.to_string()))?;
     let err = file.try_clone().map_err(|e| Problem::plain(e.to_string()))?;
     validate_java_executable(&meta.java_executable)?;
-    let java = if meta.java_executable.trim().is_empty() {
-        "java"
-    } else {
-        meta.java_executable.as_str()
-    };
+    let java = java_program(&meta.java_executable);
     let child = crate::process::command(java).current_dir(dir).args(launch_args(&meta))
         .stdin(Stdio::piped()).stdout(Stdio::from(file)).stderr(Stdio::from(err))
         .spawn().map_err(|e| Problem::plain(format!("Failed to launch Java: {e}")))?;
@@ -1190,6 +1208,13 @@ mod tests {
         assert!(text.contains("gamemode=creative"));
         assert!(text.contains("difficulty=hard"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn java_executable_selection_does_not_change_system_java() {
+        assert_eq!(java_program(""), "java");
+        assert_eq!(java_program("  "), "java");
+        assert_eq!(java_program(r#""C:\jdk-21\bin\java.exe""#), r"C:\jdk-21\bin\java.exe");
     }
 
     #[test]
