@@ -297,6 +297,8 @@ pub(super) struct Servers {
     backups: Vec<Backup>,
     confirm_restore: Option<String>,
     confirm_delete: bool,
+    /// Kill is destructive: require a second click before terminating a server.
+    confirm_kill: bool,
     property_key: Option<String>,
     service: Option<bool>,
     update: Option<Value>,
@@ -348,6 +350,7 @@ impl Servers {
             backups: Vec::new(),
             confirm_restore: None,
             confirm_delete: false,
+            confirm_kill: false,
             property_key: None,
             service: None,
             update: None,
@@ -615,6 +618,7 @@ impl Launcher {
         s.note = None;
         s.confirm_restore = None;
         s.confirm_delete = false;
+        s.confirm_kill = false;
         s.property_key = None;
         s.texts.remove(&Field::ServerPropertyValue);
         s.texts.remove(&Field::DeleteServer);
@@ -1012,6 +1016,7 @@ impl Launcher {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        self.servers.confirm_kill = false;
         STARTED_HERE.lock().unwrap().push(dir.clone());
         self.servers.restart_needed.clear();
         if servers::java::is_java(&dir) {
@@ -1037,6 +1042,7 @@ impl Launcher {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        self.servers.confirm_kill = false;
         if servers::java::is_java(&dir) {
             self.server_job("Stopping Java server", move |_log| {
                 let note = servers::java::stop(&dir)?;
@@ -1057,10 +1063,41 @@ impl Launcher {
         });
     }
 
+    /// The Kill button requires two clicks to protect against accidental world data loss.
+    fn kill_server(&mut self) {
+        let Some(dir) = self.servers.open.clone() else {
+            return;
+        };
+        if !self.servers.confirm_kill {
+            self.servers.confirm_kill = true;
+            self.servers.note = Some(tr("Kill without saving? Click Confirm Kill to force-stop this server.").to_string());
+            return;
+        }
+        self.servers.confirm_kill = false;
+        if servers::java::is_java(&dir) {
+            self.server_job("Killing Java server", move |_log| {
+                let result = servers::java::kill(&dir);
+                if result.is_ok() {
+                    servers::connectivity::stop(&dir);
+                }
+                result
+            });
+        } else {
+            self.server_job("Killing server", move |_log| {
+                let result = servers::kill(&dir);
+                if result.is_ok() {
+                    servers::connectivity::stop(&dir);
+                }
+                result
+            });
+        }
+    }
+
     fn restart_server(&mut self) {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        self.servers.confirm_kill = false;
         if servers::java::is_java(&dir) {
             self.server_job("Restarting Java server", move |_log| {
                 servers::java::stop(&dir)?;
@@ -2102,6 +2139,20 @@ impl Launcher {
         } else {
             disabled(restart)
         };
+        let kill = big(button(
+            "server-kill",
+            if self.servers.confirm_kill { "Confirm Kill" } else { "Kill" },
+            Kind::Secondary,
+            &t,
+        ));
+        let kill = if idle && running {
+            kill.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.kill_server();
+                cx.notify();
+            }))
+        } else {
+            disabled(kill)
+        };
         let panel = button("server-panel", "Open the web panel", Kind::Ghost, &t);
         let panel = if running {
             let d = dir.to_path_buf();
@@ -2124,6 +2175,7 @@ impl Launcher {
             .gap(px(8.))
             .child(start)
             .child(restart)
+            .child(kill)
             .child(panel)
             .child(
                 button("server-folder", "Open the folder", Kind::Ghost, &t)
