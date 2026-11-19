@@ -48,7 +48,7 @@ pub struct Route {
 }
 
 /// Every endpoint `start` and [`route`] answer; a test checks the two agree.
-pub const ROUTES: [Route; 32] = [
+pub const ROUTES: [Route; 33] = [
     Route {
         method: "GET",
         path: "/api/v1/status",
@@ -90,6 +90,13 @@ pub const ROUTES: [Route; 32] = [
         takes: "",
         answers: "`{\"ok\": true}`",
         what: "Stop the game and the supervisor",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/kill",
+        takes: "",
+        answers: "`{\"ok\": true}`",
+        what: "Immediately kill the game and exit the supervisor without saving",
     },
     Route {
         method: "POST",
@@ -357,6 +364,8 @@ pub struct Shared {
     pub state: Mutex<State>,
     pub log: Mutex<Log>,
     pub stop: AtomicBool,
+    /// Force-kill the engine without saving, then exit the supervisor.
+    pub kill: AtomicBool,
     pub restart: AtomicBool,
     /// Stop the supervisor after the engine exits; a game-issued stop leaves the API available.
     pub shutdown: AtomicBool,
@@ -398,6 +407,7 @@ impl Shared {
             }),
             log: Mutex::new(Log::default()),
             stop: AtomicBool::new(false),
+            kill: AtomicBool::new(false),
             restart: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
             restore: Mutex::new(None),
@@ -726,6 +736,11 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
         }
         ("POST", "/api/v1/stop") => {
             shared.shut_down();
+            Response::json(200, &json!({ "ok": true }))
+        }
+        ("POST", "/api/v1/kill") => {
+            shared.shutdown.store(true, Ordering::SeqCst);
+            shared.kill.store(true, Ordering::SeqCst);
             Response::json(200, &json!({ "ok": true }))
         }
         ("POST", "/api/v1/start") => {
