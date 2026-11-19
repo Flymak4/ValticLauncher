@@ -921,6 +921,8 @@ pub fn set_java_executable(dir: &Path, value: &str) -> Result<(), Problem> {
 }
 pub fn start(dir: &Path) -> Result<String, Problem> {
     let meta = metadata(dir).map_err(Problem::plain)?;
+    // Always validate locally, even when a caller bypasses the Servers page.
+    super::compatibility::check(dir).map_err(Problem::plain)?.block_start()?;
     let mut active = RUNNING.lock().map_err(|_| Problem::plain("Server state is locked."))?;
     if let Some(old) = active.get_mut(dir) {
         if old.child.try_wait().map_err(|e| Problem::plain(e.to_string()))?.is_none() {
