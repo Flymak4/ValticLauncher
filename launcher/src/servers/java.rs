@@ -823,6 +823,50 @@ fn launch_args(meta: &Metadata) -> Vec<String> {
     }
     args
 }
+/// Discover local Java installations for the server setup picker. This only
+/// walks installation folders and PATH; it never changes system settings.
+/// Each executable is verified when the player selects it.
+pub fn detected_java_runtimes() -> Vec<(String, PathBuf)> {
+    let executable = if cfg!(windows) { "java.exe" } else { "java" };
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+    let mut add = |path: PathBuf| {
+        if !path.is_file() || !seen.insert(path.to_string_lossy().to_lowercase()) {
+            return;
+        }
+        let label = path.parent().and_then(Path::parent)
+            .and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Java".to_string());
+        results.push((label, path));
+    };
+    if let Some(home) = std::env::var_os("JAVA_HOME") {
+        add(PathBuf::from(home).join("bin").join(executable));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            add(directory.join(executable));
+        }
+    }
+    if cfg!(windows) {
+        for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+            let Some(root) = std::env::var_os(variable) else { continue };
+            for vendor in ["Eclipse Adoptium", "Java", "Microsoft", "Zulu", "Amazon Corretto", "BellSoft"] {
+                if let Ok(installs) = fs::read_dir(PathBuf::from(&root).join(vendor)) {
+                    for install in installs.flatten() {
+                        add(install.path().join("bin").join(executable));
+                    }
+                }
+            }
+        }
+    } else if let Ok(installs) = fs::read_dir("/usr/lib/jvm") {
+        for install in installs.flatten() {
+            add(install.path().join("bin").join(executable));
+        }
+    }
+    results
+}
+
 /// Validate a per-server runtime without modifying the machine-wide Java selection.
 pub fn validate_java_executable(value: &str) -> Result<(), Problem> {
     let path = value.trim().trim_matches('"');
