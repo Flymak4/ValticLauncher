@@ -464,7 +464,7 @@ impl Launcher {
             );
         }
         if let Some(n) = self.servers.note.clone() {
-            out.push(line(Some(ui::live()), n));
+            out.push(line(Some(if self.servers.confirm_kill { ui::danger() } else { ui::live() }), n));
         }
         if running && !self.servers.restart_needed.is_empty() {
             let names: Vec<String> = self
