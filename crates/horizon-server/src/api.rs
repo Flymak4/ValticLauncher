@@ -1473,6 +1473,17 @@ mod tests {
         .unwrap();
         assert_eq!(code, 200);
         assert!(shared.stop.load(Ordering::SeqCst));
+        let (denied, _) = http::request(
+            address, "nope", "POST", "/api/v1/kill", None, Duration::from_secs(5),
+        ).unwrap();
+        assert_eq!(denied, 401, "force-kill must require the server token");
+        assert!(!shared.kill.load(Ordering::SeqCst));
+        let (accepted, _) = http::request(
+            address, token, "POST", "/api/v1/kill", None, Duration::from_secs(5),
+        ).unwrap();
+        assert_eq!(accepted, 200);
+        assert!(shared.kill.load(Ordering::SeqCst));
+        assert!(shared.shutdown.load(Ordering::SeqCst));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
