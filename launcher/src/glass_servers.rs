@@ -225,6 +225,22 @@ impl Launcher {
             } else {
                 wait(stop)
             });
+            let kill = ui::quiet(
+                "server-kill",
+                if self.servers.confirm_kill { tr("Confirm Kill") } else { tr("Kill") },
+                44.,
+                &t,
+            )
+            .px(px(14.))
+            .text_color(ui::danger());
+            buttons = buttons.child(if idle {
+                kill.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.kill_server();
+                    cx.notify();
+                }))
+            } else {
+                wait(kill)
+            });
         } else {
             let look = self.look;
             let start = keyboard(
