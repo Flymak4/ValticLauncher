@@ -55,6 +55,8 @@ pub mod remote;
 pub mod java;
 #[path = "servers/addons.rs"]
 pub mod addons;
+#[path = "servers/compatibility.rs"]
+pub mod compatibility;
 #[path = "servers/connectivity.rs"]
 pub mod connectivity;
 
