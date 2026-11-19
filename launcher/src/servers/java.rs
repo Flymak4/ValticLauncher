@@ -998,6 +998,22 @@ pub fn stop(dir: &Path) -> Result<String, Problem> {
     command(dir, "stop").map_err(Problem::plain)?;
     Ok("Graceful server stop requested.".into())
 }
+
+/// Immediately terminate only the Java child process tracked for this server.
+/// Unlike `stop`, this does not give the game a chance to save its world.
+pub fn kill(dir: &Path) -> Result<String, Problem> {
+    let mut active = RUNNING.lock().map_err(|_| Problem::plain("Server state is locked."))?;
+    let running = active.get_mut(dir)
+        .ok_or_else(|| Problem::plain("This Java server is not running in this launcher session."))?;
+    if running.child.try_wait().map_err(|e| Problem::plain(e.to_string()))?.is_some() {
+        active.remove(dir);
+        return Err(Problem::plain("The Java server has already exited."));
+    }
+    running.child.kill().map_err(|e| Problem::plain(format!("Could not kill Java server: {e}")))?;
+    running.child.wait().map_err(|e| Problem::plain(format!("Could not reap Java server: {e}")))?;
+    active.remove(dir);
+    Ok("Java server was killed. Unsaved world changes may be lost.".into())
+}
 pub fn logs(dir: &Path, since: u64) -> Option<(u64, Vec<String>)> {
     let mut file = File::open(dir.join("logs/valtic-console.log")).ok()?;
     let size = file.metadata().ok()?.len();
