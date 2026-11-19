@@ -514,6 +514,9 @@ fn uptime(secs: u64) -> String {
 /// Starting locally still succeeds, but the UI must never claim remote voice
 /// chat is ready when the UDP tunnel could not be created.
 fn launch_java_with_playit(dir: &Path) -> Result<String, Problem> {
+    // Fail before networking or add-on changes when a mod is known incompatible.
+    let report = servers::compatibility::check(dir).map_err(Problem::plain)?;
+    report.block_start()?;
     servers::java::ensure_voice_chat(dir, &|_line| {})?;
     let meta = servers::java::metadata(dir).map_err(Problem::plain)?;
     let tunnels = servers::connectivity::prepare(dir);
@@ -523,6 +526,9 @@ fn launch_java_with_playit(dir: &Path) -> Result<String, Problem> {
         meta.geyser_port,
     ).map_err(Problem::plain)?;
     let note = servers::java::start(dir)?;
+    let note = if report.warnings.is_empty() { note } else {
+        format!("{note}. Mod compatibility warnings:\n{}", report.warnings.join("\n"))
+    };
     match tunnels {
         Ok(info) => {
             servers::connectivity::monitor(dir.to_path_buf(), info);
@@ -1009,6 +1015,20 @@ impl Launcher {
             servers::java::enable_voice_chat(&dir, log)?;
             log("Preparing the public UDP voice tunnel and starting Paper".into());
             launch_java_with_playit(&dir)
+        });
+    }
+
+    /// Re-check local mod JARs without modifying the server or downloading files.
+    fn check_server_mods(&mut self) {
+        let Some(dir) = self.servers.open.clone() else { return; };
+        if !servers::java::is_java(&dir) { return; }
+        self.server_job("Checking server mod compatibility", move |_log| {
+            let report = servers::compatibility::check(&dir).map_err(Problem::plain)?;
+            if report.errors.is_empty() && report.warnings.is_empty() {
+                Ok(report.summary())
+            } else {
+                Err(Problem::plain(report.summary()))
+            }
         });
     }
 
@@ -2191,6 +2211,17 @@ impl Launcher {
                 button("server-folder", "Open the folder", Kind::Ghost, &t)
                     .on_click(move |_, _, cx| crate::glass_toast::open(cx, &folder)),
             )
+            .when(servers::java::is_java(dir), |d| d.child({
+                let check = button("server-check-mods", "Check mod compatibility", Kind::Secondary, &t);
+                if idle {
+                    check.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.check_server_mods();
+                        cx.notify();
+                    }))
+                } else {
+                    disabled(check)
+                }
+            }))
             .when(
                 servers::java::metadata(dir).ok()
                     .is_some_and(|meta| meta.software == servers::java::Software::Paper),
