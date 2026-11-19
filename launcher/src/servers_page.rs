@@ -621,6 +621,7 @@ impl Launcher {
         s.restart_needed.clear();
         s.texts.remove(&Field::Motd);
         s.texts.remove(&Field::Port);
+        s.texts.remove(&Field::ServerJavaExecutable);
         s.invalid = None;
         s.polled = None;
         self.load_details();
@@ -2942,6 +2943,78 @@ impl Launcher {
         page
     }
 
+    /// Let the server owner browse for java.exe instead of editing Windows PATH.
+    /// The same picker is available when creating or editing a server.
+    fn browse_server_java(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose Java".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = paths.await {
+                if let Some(path) = paths.pop() {
+                    let _ = this.update(cx, |this, cx| {
+                        this.servers.text(Field::ServerJavaExecutable)
+                            .set(path.to_string_lossy().into_owned());
+                        cx.notify();
+                    });
+                }
+            }
+        }).detach();
+    }
+
+    /// Installed JDKs can be selected directly, or any java.exe through Browse.
+    fn server_java_picker(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let selected = self.servers.value(Field::ServerJavaExecutable).to_string();
+        let mut candidates = div().flex().flex_wrap().gap(px(6.));
+        for (index, (name, executable)) in servers::java::detected_java_runtimes()
+            .into_iter().take(16).enumerate()
+        {
+            let path = executable.to_string_lossy().into_owned();
+            let active = path.eq_ignore_ascii_case(&selected);
+            candidates = candidates.child(
+                button(
+                    SharedString::from(format!("server-java-choice-{index}")),
+                    name, if active { Kind::Primary } else { Kind::Secondary }, &t,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.servers.text(Field::ServerJavaExecutable).set(path.clone());
+                    cx.notify();
+                }))
+            );
+        }
+        let reset = button("server-java-default", "Use system Java", 
+                if selected.trim().is_empty() { Kind::Primary } else { Kind::Secondary }, &t)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.servers.text(Field::ServerJavaExecutable).set(String::new());
+                cx.notify();
+            }));
+        let browse = button("server-java-browse", "Browse for java.exe", Kind::Secondary, &t)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.browse_server_java(cx);
+            }));
+        div().flex().flex_col().gap(px(8.))
+            .child(self.field(Field::ServerJavaExecutable,
+                "Default Java (PATH), or a full path to java.exe", 480., cx))
+            .child(div().flex().flex_wrap().gap(px(8.)).child(reset).child(browse))
+            .child(candidates)
+            .child(text(theme::CAPTION).text_color(t.muted).child(
+                "Choose an installed Java, browse for java.exe, or use your system default. Each server saves its own setting."
+            ))
+    }
+
+    fn save_server_java(&mut self) {
+        let Some(dir) = self.servers.open.clone() else { return; };
+        let path = self.servers.value(Field::ServerJavaExecutable).to_string();
+        self.server_job("Saving Java runtime", move |_log| {
+            servers::java::set_java_executable(&dir, &path)?;
+            Ok("Java runtime saved for this server. Restart the server to use it.".to_string())
+        });
+    }
+
     fn save_server_property(&mut self) {
         let Some(dir) = self.servers.open.clone() else { return; };
         let Some(key) = self.servers.property_key.clone() else { return; };
@@ -2963,8 +3036,32 @@ impl Launcher {
         if self.servers.open.as_deref().is_some_and(servers::java::is_java) {
             let current = self.servers.open.as_ref()
                 .and_then(|dir| servers::java::metadata(dir).ok());
+            if !self.servers.texts.contains_key(&Field::ServerJavaExecutable) {
+                if let Some(meta) = current.as_ref() {
+                    self.servers.text(Field::ServerJavaExecutable).set(meta.java_executable.clone());
+                }
+            }
+            let runtime_picker = self.server_java_picker(cx);
+            let save_runtime = button("server-java-save", "Save Java runtime", Kind::Primary, &t);
+            let can_save = !status.running() && self.servers.busy.is_none();
+            let save_runtime = if can_save {
+                save_runtime.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.save_server_java();
+                    cx.notify();
+                })).into_any_element()
+            } else { disabled(save_runtime).into_any_element() };
             return div().flex().flex_col().gap(px(14.))
                 .child(div().flex().child(edit))
+                .child(text(theme::UI).text_color(t.ink).child("Java runtime"))
+                .children(current.as_ref().map(|meta| text(theme::CAPTION).text_color(t.muted)
+                    .child(format!("Currently saved: {}", if meta.java_executable.is_empty() {
+                        "System Java (PATH)".to_string()
+                    } else { meta.java_executable.clone() }))))
+                .child(runtime_picker)
+                .child(div().flex().child(save_runtime))
+                .child(text(theme::CAPTION).text_color(t.muted).child(
+                    "Stop the server to change Java. For Minecraft 1.21.1, choose a Java 21 installation."
+                ))
                 .child(text(theme::UI).text_color(t.ink).child(
                     "Open the original setup screen to edit the server name, RAM, game rules, player limit, account access and add-ons."
                 ))
@@ -3965,12 +4062,7 @@ impl Launcher {
             ))
             .when(software != "rust", |d| d.child(row(
                 "Java runtime",
-                div().flex().flex_col().gap(px(6.))
-                    .child(self.field(Field::ServerJavaExecutable, "Default Java (PATH) — or paste full path to java.exe", 480., cx))
-                    .child(text(theme::CAPTION).text_color(t.muted).child(
-                        "Leave blank for the default Java. To use Java 21, paste the full path to its bin\\java.exe. Each server remembers its own selection."
-                    ))
-                    .into_any_element(),
+                self.server_java_picker(cx).into_any_element(),
             )))
             .when(software != "rust", |d| d.child(row("Maximum RAM", memory.into_any_element())))
             .when(software == "rust", |d| d.child(row(
