@@ -587,6 +587,8 @@ impl Launcher {
                             if id == "rust" { "Rust (Horizon)" } else { label },
                             if id == "rust" {
                                 "★ Recommended · Native Rust · 26.3".to_string()
+                            } else if id == "arclight" {
+                                "NeoForge mods + Bukkit plugins".to_string()
                             } else {
                                 "Java Edition".to_string()
                             },
@@ -677,7 +679,7 @@ impl Launcher {
                     .child(if can_voice {
                         "Install Simple Voice Chat automatically and create its UDP tunnel. Friends need the matching client mod; Valtic shows them the connection address."
                     } else {
-                        "Choose Paper, Fabric, Forge or NeoForge. Voice chat is not supported on Vanilla or Horizon Rust."
+                        "Choose Paper, Fabric, Forge, NeoForge or Arclight. Voice chat is not supported on Vanilla or Horizon Rust."
                     })))
             .child(ui::toggle("create-voice-chat", voice_chat && can_voice, self.look.accent, self.look.on_accent, &t)
                 .when(can_voice, |toggle| toggle.on_click(set(cx, |c| c.voice_chat = !c.voice_chat))));

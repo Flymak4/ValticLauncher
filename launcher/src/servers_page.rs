@@ -125,12 +125,13 @@ const MODES: [(&str, &str); 3] = [
     ("adventure", "Adventure"),
 ];
 
-const SOFTWARES: [(&str, &str); 6] = [
+const SOFTWARES: [(&str, &str); 7] = [
     ("vanilla", "Vanilla"),
     ("paper", "Paper"),
     ("fabric", "Fabric"),
     ("forge", "Forge"),
     ("neoforge", "NeoForge"),
+    ("arclight", "Arclight"),
     ("rust", "Rust ★"),
 ];
 
@@ -1240,6 +1241,7 @@ impl Launcher {
             Some(servers::java::Software::Fabric) => "fabric",
             Some(servers::java::Software::Forge) => "forge",
             Some(servers::java::Software::Neoforge) => "neoforge",
+            Some(servers::java::Software::Arclight) => "arclight",
             None => "rust",
         };
         c.ram_gb = java.as_ref().map_or(4, |meta| meta.ram_gb);
@@ -3837,7 +3839,7 @@ impl Launcher {
                         if can_voice {
                             "Install Simple Voice Chat automatically. Players also need the client mod and UDP port 24454 reachable."
                         } else {
-                            "Choose Paper, Fabric, Forge or NeoForge to enable voice chat."
+                            "Choose Paper, Fabric, Forge, NeoForge or Arclight to enable voice chat."
                         },
                     )),
             )

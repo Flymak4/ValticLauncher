@@ -209,7 +209,7 @@ pub fn network_config_matches(
 
 pub fn install(dir: &Path, software: Software, version: &str, addons: Addons, log: &dyn Fn(String)) -> Result<(), String> {
     if addons.voice_chat && !supports_voice_chat(software) {
-        return Err("Voice chat needs Paper, Fabric, Forge or NeoForge (not Vanilla).".into());
+        return Err("Voice chat needs Paper, Fabric, Forge, NeoForge or Arclight (not Vanilla).".into());
     }
     if addons.geyser && !supports_geyser(software) {
         return Err("Automatic Geyser + Floodgate setup currently requires Paper.".into());
@@ -227,6 +227,7 @@ pub fn install(dir: &Path, software: Software, version: &str, addons: Addons, lo
             Software::Fabric => "fabric",
             Software::Forge => "forge",
             Software::Neoforge => "neoforge",
+            Software::Arclight => "neoforge",
         };
         log(format!("Installing Simple Voice Chat for {version} ({loader})"));
         modrinth_jar(&addon_dir, "simple-voice-chat", version, loader, "simple-voice-chat.jar")?;

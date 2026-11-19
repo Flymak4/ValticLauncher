@@ -1,5 +1,5 @@
 //! Java Edition server hosting for Valtic. A separate runtime from the legacy native server.
-//! All downloads are from official Mojang/Fabric/Forge/NeoForge endpoints.
+//! Server downloads use official Mojang, loader, Paper, and Arclight release endpoints.
 use super::{Entry, NewServer, Problem, Status, World};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -25,6 +25,7 @@ pub enum Software {
     Fabric,
     Forge,
     Neoforge,
+    Arclight,
 }
 impl Software {
     pub fn label(self) -> &'static str {
@@ -34,6 +35,7 @@ impl Software {
             Self::Fabric => "Fabric",
             Self::Forge => "Forge",
             Self::Neoforge => "NeoForge",
+            Self::Arclight => "Arclight",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -43,6 +45,7 @@ impl Software {
             "fabric" => Some(Self::Fabric),
             "forge" => Some(Self::Forge),
             "neoforge" => Some(Self::Neoforge),
+            "arclight" => Some(Self::Arclight),
             _ => None,
         }
     }
@@ -162,6 +165,7 @@ pub struct VersionCatalog {
     pub fabric: Vec<String>,
     pub forge: Vec<String>,
     pub neoforge: Vec<String>,
+    pub arclight: Vec<String>,
 }
 
 impl VersionCatalog {
@@ -172,6 +176,7 @@ impl VersionCatalog {
             "fabric" => &self.fabric,
             "forge" => &self.forge,
             "neoforge" => &self.neoforge,
+            "arclight" => &self.arclight,
             _ => &[],
         }
     }
@@ -213,6 +218,57 @@ fn latest_build<'a>(builds: impl IntoIterator<Item = &'a str>) -> Option<&'a str
     stable.or_else(|| builds.into_iter().max_by_key(|build| build_order(build)))
 }
 
+
+const ARCLIGHT_RELEASES: &str = "https://api.github.com/repos/IzzelAliz/Arclight/releases";
+
+/// Read official release assets rather than guessing a download URL or offering
+/// Minecraft versions for which Arclight did not publish a NeoForge server jar.
+fn arclight_releases() -> Result<Vec<Value>, String> {
+    let mut releases = Vec::new();
+    for page in 1..=3 {
+        let url = format!("{ARCLIGHT_RELEASES}?per_page=100&page={page}");
+        let result = fetch_json(&url)?;
+        let page_releases = result.as_array().ok_or("Invalid Arclight releases response")?;
+        releases.extend(page_releases.iter().cloned());
+        if page_releases.len() < 100 { break; }
+    }
+    Ok(releases)
+}
+
+fn arclight_asset<'a>(releases: &'a [Value], version: &str) -> Option<&'a Value> {
+    let prefix = format!("arclight-neoforge-{version}-");
+    let mut fallback = None;
+    for release in releases {
+        let Some(assets) = release["assets"].as_array() else { continue };
+        for asset in assets {
+            let Some(name) = asset["name"].as_str() else { continue };
+            if !name.starts_with(&prefix) || !name.ends_with(".jar") { continue; }
+            if fallback.is_none() { fallback = Some(asset); }
+            // Prefer a stable build; use an official snapshot only if necessary.
+            if release["prerelease"] != true && !name.contains("SNAPSHOT") {
+                return Some(asset);
+            }
+        }
+    }
+    fallback
+}
+
+fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    use sha2::{Digest as _, Sha256};
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 { break; }
+        hash.update(&buf[..n]);
+    }
+    if format!("{:x}", hash.finalize()) != expected.to_ascii_lowercase() {
+        return Err("Arclight release checksum mismatch. Download cancelled.".into());
+    }
+    Ok(())
+}
+
 pub fn versions() -> Result<VersionCatalog, String> {
     let manifest = fetch_json(MANIFEST)?;
     let releases: Vec<String> = manifest["versions"].as_array()
@@ -244,6 +300,7 @@ pub fn versions() -> Result<VersionCatalog, String> {
     ).map(|xml| maven_versions(&xml).iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
         .unwrap_or_default();
 
+    let arclight = arclight_releases().unwrap_or_default();
     Ok(VersionCatalog {
         vanilla: releases.clone(),
         // Paper availability is validated against Paper's actual stable builds
@@ -262,6 +319,8 @@ pub fn versions() -> Result<VersionCatalog, String> {
                     neo_builds.iter().any(|build| build.starts_with(&prefix)))
             }
         }).cloned().collect(),
+        arclight: releases.iter().filter(|v| arclight_asset(&arclight, v).is_some())
+            .cloned().collect(),
     })
 }
 fn validate_version(version: &str) -> Result<Value, String> {
@@ -387,6 +446,35 @@ fn install(software: Software, version: &str, dir: &Path, log: &dyn Fn(String)) 
                 .ok_or("NeoForge did not create the required launch arguments.")?;
             Ok((Launch::Argfile(args), Some(build.into())))
         }
+        Software::Arclight => {
+            let releases = arclight_releases()?;
+            let asset = arclight_asset(&releases, version)
+                .ok_or_else(|| format!("Arclight has no NeoForge build for Minecraft {version}"))?;
+            let url = asset["browser_download_url"].as_str()
+                .ok_or("Arclight release is missing its download URL")?;
+            if !url.starts_with("https://github.com/IzzelAliz/Arclight/releases/download/")
+                || !url.ends_with(".jar")
+            {
+                return Err("Unexpected Arclight download URL.".into());
+            }
+            let filename = asset["name"].as_str().ok_or("Arclight asset name is missing")?;
+            let build = filename.strip_prefix(&format!("arclight-neoforge-{version}-"))
+                .and_then(|s| s.strip_suffix(".jar"))
+                .ok_or("Unexpected Arclight asset filename")?;
+            log(format!("Downloading official Arclight NeoForge {build} for Minecraft {version}"));
+            let jar = dir.join("server.jar");
+            download(url, &jar, None)?;
+            if let Some(digest) = asset["digest"].as_str() {
+                let checksum = digest.strip_prefix("sha256:")
+                    .filter(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .ok_or("Invalid Arclight release checksum")?;
+                if let Err(error) = verify_sha256(&jar, checksum) {
+                    let _ = fs::remove_file(jar);
+                    return Err(error);
+                }
+            }
+            Ok((Launch::Jar("server.jar".into()), Some(build.into())))
+        }
     }
 }
 fn run_installer(dir: &Path, log: &dyn Fn(String)) -> Result<(), String> {
@@ -493,6 +581,10 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, a
     let result = (|| -> Result<Entry, String> {
         let port = super::free_port(25565, &super::ports_taken());
         let (launch, loader_version) = install(software, version, &dir, log)?;
+        if software == Software::Arclight {
+            fs::create_dir_all(dir.join("mods")).map_err(|e| e.to_string())?;
+            fs::create_dir_all(dir.join("plugins")).map_err(|e| e.to_string())?;
+        }
         super::addons::install(&dir, software, version, addons, log)?;
         fs::write(dir.join("eula.txt"), "eula=true\n").map_err(|e| e.to_string())?;
         fs::write(dir.join("server.properties"), properties(spec, port)).map_err(|e| e.to_string())?;
@@ -945,8 +1037,33 @@ mod tests {
             vec!["1.8.9-11.15.1", "26.3-66.1.0"]);
     }
     #[test]
+    fn arclight_selects_exact_neoforge_version_and_prefers_stable() {
+        let releases = json!([
+            {"prerelease": true, "assets": [
+                {"name": "arclight-neoforge-1.21.1-1.0.2-SNAPSHOT-abc.jar"},
+                {"name": "arclight-neoforge-1.21.11-1.0.0-SNAPSHOT-def.jar"}
+            ]},
+            {"prerelease": false, "assets": [
+                {"name": "arclight-fabric-1.21.1-1.0.1-xyz.jar"},
+                {"name": "arclight-neoforge-1.21.1-1.0.1-xyz.jar"}
+            ]}
+        ]);
+        let entries = releases.as_array().unwrap();
+        assert_eq!(
+            arclight_asset(entries, "1.21.1").unwrap()["name"],
+            "arclight-neoforge-1.21.1-1.0.1-xyz.jar"
+        );
+        assert_eq!(
+            arclight_asset(entries, "1.21.11").unwrap()["name"],
+            "arclight-neoforge-1.21.11-1.0.0-SNAPSHOT-def.jar"
+        );
+        assert!(arclight_asset(entries, "1.20.1").is_none());
+    }
+    #[test]
     fn parses_loader_names_and_safe_launch_args() {
         assert_eq!(Software::parse("neoforge"), Some(Software::Neoforge));
+        assert_eq!(Software::parse("arclight"), Some(Software::Arclight));
+        assert_eq!(Software::Arclight.label(), "Arclight");
         assert_eq!(Software::parse("unknown"), None);
         let m = Metadata {
             software: Software::Fabric, minecraft_version: "1.21.1".into(),

@@ -32,7 +32,7 @@ impl Launcher {
     pub(super) fn glass_servers_page(&mut self, cx: &mut Context<Self>) -> Div {
         let head = glass_ui::page_head(
             tr("Servers"),
-            tr("Host a Vanilla, Fabric, Forge, NeoForge or Horizon Rust server on your PC."),
+            tr("Host a Vanilla, Paper, Fabric, Forge, NeoForge, Arclight or Horizon Rust server on your PC."),
         );
         // The mockup always shows a server: the open one, else the first.
         if self.servers.open.is_none() {
