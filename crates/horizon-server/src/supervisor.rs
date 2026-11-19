@@ -777,6 +777,17 @@ fn supervise(
                 stdin = None;
             }
         }
+        // The authenticated Kill action is deliberately different from Stop:
+        // do not wait for the game to save or for the graceful-stop timeout.
+        if shared.kill.swap(false, Ordering::SeqCst) {
+            restart = false;
+            stopping = Some(Instant::now());
+            shared.shutdown.store(true, Ordering::SeqCst);
+            shared.set_phase(Phase::Stopping);
+            crate::management::stopping(shared);
+            note(shared, "WARN", "Force-killing the game without saving");
+            let _ = child.kill();
+        }
         let requests = signals::requests();
         let signal = requests > handled;
         let asked = signal || shared.stop.swap(false, Ordering::SeqCst);
