@@ -56,6 +56,9 @@ pub struct Metadata {
     pub minecraft_version: String,
     pub loader_version: Option<String>,
     pub ram_gb: u8,
+    /// Blank means use the Java executable found on PATH.
+    #[serde(default)]
+    pub java_executable: String,
     pub port: u16,
     #[serde(default)]
     pub voice_chat: bool,
@@ -608,6 +611,7 @@ pub fn create(spec: &NewServer, software: Software, version: &str, ram_gb: u8, a
             minecraft_version: version.into(),
             loader_version,
             ram_gb,
+            java_executable: String::new(),
             port,
             voice_chat: addons.voice_chat,
             geyser: addons.geyser,
@@ -819,6 +823,36 @@ fn launch_args(meta: &Metadata) -> Vec<String> {
     }
     args
 }
+/// Validate a per-server runtime without modifying the machine-wide Java selection.
+pub fn validate_java_executable(value: &str) -> Result<(), Problem> {
+    let path = value.trim().trim_matches('"');
+    if path.is_empty() {
+        return Ok(()); // Use java from PATH
+    }
+    let executable = Path::new(path);
+    if !executable.is_file() {
+        return Err(Problem::plain(format!("Java executable not found: {path}. Select the java.exe file inside your JDK's bin folder.")));
+    }
+    let output = crate::process::command(path).arg("-version").output()
+        .map_err(|e| Problem::plain(format!("Could not run selected Java: {e}")))?;
+    if !output.status.success() {
+        return Err(Problem::plain("The selected Java executable did not start successfully."));
+    }
+    Ok(())
+}
+
+/// Set the Java runtime for an existing stopped server and persist it to metadata.
+pub fn set_java_executable(dir: &Path, value: &str) -> Result<(), Problem> {
+    if is_running(dir) {
+        return Err(Problem::plain("Stop the server before changing its Java runtime."));
+    }
+    validate_java_executable(value)?;
+    let mut meta = metadata(dir).map_err(Problem::plain)?;
+    meta.java_executable = value.trim().trim_matches('"').to_string();
+    fs::write(dir.join(META),
+        serde_json::to_vec_pretty(&meta).map_err(|e| Problem::plain(e.to_string()))?)
+        .map_err(|e| Problem::plain(e.to_string()))
+}
 pub fn start(dir: &Path) -> Result<String, Problem> {
     let meta = metadata(dir).map_err(Problem::plain)?;
     let mut active = RUNNING.lock().map_err(|_| Problem::plain("Server state is locked."))?;
@@ -833,7 +867,13 @@ pub fn start(dir: &Path) -> Result<String, Problem> {
     let file = OpenOptions::new().create(true).append(true).open(log_dir.join("valtic-console.log"))
         .map_err(|e| Problem::plain(e.to_string()))?;
     let err = file.try_clone().map_err(|e| Problem::plain(e.to_string()))?;
-    let child = crate::process::command("java").current_dir(dir).args(launch_args(&meta))
+    validate_java_executable(&meta.java_executable)?;
+    let java = if meta.java_executable.trim().is_empty() {
+        "java"
+    } else {
+        meta.java_executable.as_str()
+    };
+    let child = crate::process::command(java).current_dir(dir).args(launch_args(&meta))
         .stdin(Stdio::piped()).stdout(Stdio::from(file)).stderr(Stdio::from(err))
         .spawn().map_err(|e| Problem::plain(format!("Failed to launch Java: {e}")))?;
     active.insert(dir.to_owned(), Running { child, started: Instant::now() });
