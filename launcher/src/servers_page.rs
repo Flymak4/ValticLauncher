@@ -48,6 +48,8 @@ pub(super) enum Field {
     JavaVersion,
     /// Search across all supported Java server versions without a fixed shortlist.
     JavaVersionSearch,
+    /// Per-server Java executable; empty uses the system default.
+    ServerJavaExecutable,
     /// Home's Mods tab's filter (`instance_mods.rs`).
     InstanceModsFilter,
     /// Home's Multiplayer section's (`multiplayer_page.rs`).
@@ -71,7 +73,7 @@ pub(super) enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 27] = [
+    const ALL: [Field; 28] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -86,6 +88,7 @@ impl Field {
         Field::InstanceVersion,
         Field::JavaVersion,
         Field::JavaVersionSearch,
+        Field::ServerJavaExecutable,
         Field::InstanceModsFilter,
         Field::ServerName,
         Field::ServerAddress,
@@ -1151,6 +1154,7 @@ impl Launcher {
         self.servers.text(Field::Seed).set(String::new());
         self.servers.text(Field::JavaVersion).set("26.3".to_string());
         self.servers.text(Field::JavaVersionSearch).set(String::new());
+        self.servers.text(Field::ServerJavaExecutable).set(String::new());
         self.servers
             .text(Field::Players)
             .set(if glass { String::new() } else { own.clone() });
@@ -1229,6 +1233,7 @@ impl Launcher {
         self.servers.text(Field::Players).set(String::new());
         if let Some(meta) = &java {
             self.servers.text(Field::JavaVersion).set(meta.minecraft_version.clone());
+            self.servers.text(Field::ServerJavaExecutable).set(meta.java_executable.clone());
         }
         let selected = |key: &str, table: &[(&'static str, &'static str)], fallback: &'static str| {
             table.iter().find(|(id, _)| *id == key).map_or(fallback, |(id, _)| *id)
@@ -1273,6 +1278,7 @@ impl Launcher {
         let software = c.software;
         let version = self.servers.value(Field::JavaVersion).to_string();
         let ram = c.ram_gb;
+        let java_executable = self.servers.value(Field::ServerJavaExecutable).to_string();
         let addons = servers::addons::Addons { voice_chat: c.voice_chat, geyser: c.geyser };
         let name = self.servers.value(Field::Name).trim().to_string();
         let mut players = c.friends.clone();
@@ -1307,7 +1313,9 @@ impl Launcher {
                 let software = servers::java::Software::parse(software)
                     .ok_or_else(|| Problem::plain("Unsupported Java server software."));
                 software.and_then(|software| {
+                    servers::java::validate_java_executable(&java_executable)?;
                     servers::java::edit_existing(&dir, &spec, software, &version, ram, addons, &log)?;
+                    servers::java::set_java_executable(&dir, &java_executable)?;
                     servers::rename(&dir, &spec.name).map_err(Problem::plain)
                 })
             } else {
@@ -1408,6 +1416,7 @@ impl Launcher {
             return;
         }
         let ram_gb = c.ram_gb;
+        let java_executable = self.servers.value(Field::ServerJavaExecutable).to_string();
         let addons = servers::addons::Addons { voice_chat: c.voice_chat, geyser: c.geyser };
         let tx = self.servers.tx.clone();
         self.servers.creating = true;
@@ -1423,7 +1432,12 @@ impl Launcher {
             let result = if native_rust {
                 servers::create(&spec, native_tag.as_deref(), &log)
             } else {
-                servers::java::create(&spec, software, &minecraft_version, ram_gb, addons, &log)
+                (|| {
+                    servers::java::validate_java_executable(&java_executable)?;
+                    let entry = servers::java::create(&spec, software, &minecraft_version, ram_gb, addons, &log)?;
+                    servers::java::set_java_executable(&entry.dir, &java_executable)?;
+                    Ok(entry)
+                })()
             };
             let _ = tx.send(Event::Created(result));
         });
@@ -1659,6 +1673,7 @@ impl Launcher {
             | Field::JavaVersionSearch
             | Field::InstanceModsFilter
             | Field::ConsoleSearch
+            | Field::ServerJavaExecutable
             | Field::DeleteServer
             | Field::AccentHex => {}
             Field::ServerPropertyValue => self.save_server_property(),
@@ -3948,6 +3963,15 @@ impl Launcher {
             .when(!editing && software != "rust", |d| d.child(
                 row("Browse available versions", version_browser.into_any_element())
             ))
+            .when(software != "rust", |d| d.child(row(
+                "Java runtime",
+                div().flex().flex_col().gap(px(6.))
+                    .child(self.field(Field::ServerJavaExecutable, "Default Java (PATH) — or paste full path to java.exe", 480., cx))
+                    .child(text(theme::CAPTION).text_color(t.muted).child(
+                        "Leave blank for the default Java. To use Java 21, paste the full path to its bin\\java.exe. Each server remembers its own selection."
+                    ))
+                    .into_any_element(),
+            )))
             .when(software != "rust", |d| d.child(row("Maximum RAM", memory.into_any_element())))
             .when(software == "rust", |d| d.child(row(
                 "Memory",
