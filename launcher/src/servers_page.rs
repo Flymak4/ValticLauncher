@@ -615,7 +615,7 @@ impl Launcher {
             return;
         }
         let s = &mut self.servers;
-        s.open = Some(dir);
+        s.open = Some(dir.clone());
         // Its settings may have changed while it was open.
         s.modes.clear();
         s.tab = Tab::Overview;
