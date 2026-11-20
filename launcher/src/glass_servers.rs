@@ -58,6 +58,8 @@ impl Launcher {
             .w(px(SIDE))
             .gap(px(10.))
             .child(self.glass_server_list(cx))
+            .children(open.as_ref().is_some_and(|dir| servers::java::is_java(dir))
+                .then(|| self.glass_server_icon(cx)))
             .children(open.is_some().then(|| self.glass_server_usage(&status)))
             .children(open.is_some().then(|| self.glass_addresses(&status, cx)));
         let mut page = div().flex().flex_col().child(head).child(
@@ -713,12 +715,20 @@ impl Launcher {
                 "stopped" => self.servers.stopped_line(&e.dir),
                 _ => phase_label(&status),
             };
+            // Use the actual server-icon.png players see on Minecraft's multiplayer list.
+            let thumbnail = match self.server_icon_image(&e.dir, 36.) {
+                Some(icon) => instance_icons::centred(icon, 36., self.scale).into_any_element(),
+                None => self.grass_mark(36.)
+                    .map(|icon| instance_icons::centred(icon, 36., self.scale).into_any_element())
+                    .unwrap_or_else(|| div().size(px(36.)).into_any_element()),
+            };
             let dir = e.dir.clone();
             list = list.child(
                 keyboard(
                     row(SharedString::from(format!("server-row-{i}")), current),
                     &t,
                 )
+                .child(thumbnail)
                 .child(ui::list_text(e.name.clone(), line))
                 .child(ui::dot(tone(&status)))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -752,6 +762,45 @@ impl Launcher {
                 cx.notify();
             }))
         })
+    }
+
+    /// Dedicated per-server icon chooser. Minecraft uses the 64x64 PNG in the server root
+    /// for the icon in Multiplayer > Server List, without any server.properties icon key.
+    fn glass_server_icon(&mut self, cx: &mut Context<Self>) -> Div {
+        let Some(dir) = self.servers.open.clone() else { return div() };
+        let t = self.theme;
+        let installed = dir.join("server-icon.png").is_file();
+        let preview = match self.server_icon_image(&dir, 56.) {
+            Some(icon) => instance_icons::centred(icon, 56., self.scale).into_any_element(),
+            None => self.grass_mark(56.)
+                .map(|icon| instance_icons::centred(icon, 56., self.scale).into_any_element())
+                .unwrap_or_else(|| div().size(px(56.)).into_any_element()),
+        };
+        let mut actions = div().flex().flex_col().gap(px(6.))
+            .child(button("server-icon-choose", if installed { "Change icon…" } else { "Add server icon…" }, Kind::Secondary, &t)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.choose_server_icon(cx);
+                    cx.notify();
+                })));
+        if installed {
+            actions = actions.child(button("server-icon-remove", "Remove icon", Kind::Ghost, &t)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.remove_server_icon(cx);
+                })));
+        }
+        glass::plate(radius::PANEL)
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .p(px(20.))
+            .child(ui::card_heading(tr("Server icon")))
+            .child(div().flex().items_center().gap(px(12.))
+                .child(div().size(px(56.)).flex_none().rounded(px(8.))
+                    .overflow_hidden().child(preview))
+                .child(actions))
+            .child(ui::card_note(
+                "Choose any PNG, JPEG or WebP. Valtic makes the 64×64 server-icon.png Minecraft needs. Restart the server to update its icon in the multiplayer list."
+            ))
     }
 
     /// Live CPU and RAM read from the same server status as the Overview, not whole-PC stats.
