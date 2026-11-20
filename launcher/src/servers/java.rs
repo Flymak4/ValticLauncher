@@ -82,6 +82,8 @@ struct Running {
     /// Wall-clock start time, used to avoid replaying the previous run's
     /// Minecraft latest.log when the captured stdout is quiet.
     started_wall: SystemTime,
+    /// Prior process and system CPU ticks, used for one-second CPU sampling.
+    cpu_sample: Option<(Instant, u64, u64)>,
 }
 static RUNNING: LazyLock<Mutex<HashMap<PathBuf, Running>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -945,6 +947,7 @@ pub fn start(dir: &Path) -> Result<String, Problem> {
         child,
         started: Instant::now(),
         started_wall: SystemTime::now(),
+        cpu_sample: None,
     });
     Ok(format!("Starting {} {} on port {}", meta.software.label(), meta.minecraft_version, meta.port))
 }
@@ -970,6 +973,97 @@ pub fn is_running(dir: &Path) -> bool {
     let Ok(mut active) = RUNNING.lock() else { return false; };
     active.get_mut(dir).is_some_and(|s| s.child.try_wait().ok() == Some(None))
 }
+/// Samples only the running Minecraft Java process, not the entire PC.
+#[cfg(target_os = "windows")]
+fn process_usage(running: &mut Running) -> (Option<u64>, Option<f64>) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::Threading::GetProcessTimes;
+
+    let handle = running.child.as_raw_handle();
+    let mut memory_info: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+    memory_info.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    let memory = (unsafe {
+        GetProcessMemoryInfo(handle, &mut memory_info, memory_info.cb)
+    } != 0).then_some(memory_info.WorkingSetSize as u64);
+
+    let mut created: FILETIME = unsafe { std::mem::zeroed() };
+    let mut exited: FILETIME = unsafe { std::mem::zeroed() };
+    let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
+    let mut user: FILETIME = unsafe { std::mem::zeroed() };
+    if unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) } == 0 {
+        return (memory, None);
+    }
+
+    let to_ticks = |time: FILETIME| {
+        ((time.dwHighDateTime as u64) << 32) | (time.dwLowDateTime as u64)
+    };
+    let ticks = to_ticks(kernel).saturating_add(to_ticks(user));
+    let now = Instant::now();
+    let cpu = running.cpu_sample.and_then(|(last, previous_ticks, _)| {
+        let seconds = now.saturating_duration_since(last).as_secs_f64();
+        if seconds <= 0.0 {
+            return None;
+        }
+        let cores = std::thread::available_parallelism().map_or(1, |count| count.get()) as f64;
+        // Process CPU time is in 100-nanosecond intervals. Divide by
+        // available logical CPUs so 100% means the entire computer.
+        Some((ticks.saturating_sub(previous_ticks) as f64
+            / (seconds * 10_000_000.0 * cores) * 100.0).clamp(0.0, 100.0))
+    });
+    running.cpu_sample = Some((now, ticks, 0));
+    (memory, cpu)
+}
+
+#[cfg(target_os = "linux")]
+fn process_usage(running: &mut Running) -> (Option<u64>, Option<f64>) {
+    let pid = running.child.id();
+    let memory = fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()
+        .and_then(|status| {
+            status.lines().find_map(|line| {
+                line.strip_prefix("VmRSS:")?
+                    .split_whitespace().next()?.parse::<u64>().ok()
+            })
+        })
+        .and_then(|kib| kib.checked_mul(1024));
+    let process_ticks = fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            // Fields following the final ") " start at field 3; 14 and 15
+            // are the process's user and kernel CPU jiffies respectively.
+            let (_, fields) = stat.rsplit_once(") ")?;
+            let parts: Vec<&str> = fields.split_whitespace().collect();
+            Some(parts.get(11)?.parse::<u64>().ok()?
+                .saturating_add(parts.get(12)?.parse::<u64>().ok()?))
+        });
+    let system_ticks = fs::read_to_string("/proc/stat")
+        .ok()
+        .and_then(|stat| {
+            let mut parts = stat.lines().next()?.split_whitespace();
+            (parts.next()? == "cpu")
+                .then(|| parts.filter_map(|part| part.parse::<u64>().ok()).sum::<u64>())
+        });
+    let cpu = process_ticks.zip(system_ticks).and_then(|(process, system)| {
+        let previous = running.cpu_sample;
+        running.cpu_sample = Some((Instant::now(), process, system));
+        previous.and_then(|(_, last_process, last_system)| {
+            let elapsed = system.saturating_sub(last_system);
+            (elapsed > 0).then(|| {
+                (100.0 * process.saturating_sub(last_process) as f64 / elapsed as f64)
+                    .clamp(0.0, 100.0)
+            })
+        })
+    });
+    (memory, cpu)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn process_usage(_running: &mut Running) -> (Option<u64>, Option<f64>) {
+    (None, None)
+}
+
 pub fn status(dir: &Path) -> Status {
     let mut result = Status::stopped();
     if let Ok(m) = metadata(dir) {
@@ -982,6 +1076,9 @@ pub fn status(dir: &Path) -> Status {
             if p.child.try_wait().ok() == Some(None) {
                 result.phase = "running".into();
                 result.uptime = Some(p.started.elapsed().as_secs());
+                let (ram, cpu) = process_usage(p);
+                result.ram_bytes = ram;
+                result.cpu_percent = cpu;
             } else {
                 active.remove(dir);
             }
