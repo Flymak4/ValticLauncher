@@ -2385,6 +2385,7 @@ impl Launcher {
                 .flex()
                 .flex_col()
                 .flex_1()
+                .min_w(px(135.))
                 .gap(px(4.))
                 .p(px(16.))
                 .child(text(theme::TITLE).text_color(t.ink).child(value))
@@ -2394,6 +2395,7 @@ impl Launcher {
         let on = status.running();
         div()
             .flex()
+            .flex_wrap()
             .gap(px(12.))
             .child(tile(
                 if on {
