@@ -58,7 +58,7 @@ impl Launcher {
             .w(px(SIDE))
             .gap(px(10.))
             .child(self.glass_server_list(cx))
-            .children(open.as_ref().is_some_and(|dir| servers::java::is_java(dir))
+            .children(open.as_ref().is_some_and(|dir| supports_minecraft_server_icon(dir))
                 .then(|| self.glass_server_icon(cx)))
             .children(open.is_some().then(|| self.glass_server_usage(&status)))
             .children(open.is_some().then(|| self.glass_addresses(&status, cx)));
@@ -351,6 +351,34 @@ impl Launcher {
                     .child(buttons),
             )
             .child(corner);
+        // The icon action belongs beside the active server, not only at the
+        // bottom of the sidebar (which can scroll out of view).
+        if supports_minecraft_server_icon(dir) {
+            let installed = dir.join("server-icon.png").is_file();
+            glass = glass.child(
+                div()
+                    .relative()
+                    .mt(px(12.))
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        ui::quiet(
+                            "server-icon-quick",
+                            if installed { "Change server icon" } else { "Add server icon" },
+                            40.,
+                            &t,
+                        )
+                        .px(px(16.))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.choose_server_icon(cx);
+                            cx.notify();
+                        })),
+                    )
+                    .child(ui::card_note("Minecraft server-list icon · restart the server to apply")),
+            );
+        }
         // Paper servers may have been created before the voice-chat option
         // existed. Keep the setup/repair action available on existing servers.
         if servers::java::metadata(dir).ok()

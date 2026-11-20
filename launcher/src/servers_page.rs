@@ -440,11 +440,17 @@ impl Servers {
     }
 }
 
+/// Valtic-owned Java servers have valtic-server.json; imported Java
+/// server folders can be recognised by their server.properties file.
+fn supports_minecraft_server_icon(dir: &Path) -> bool {
+    servers::java::is_java(dir) || dir.join("server.properties").is_file()
+}
+
 /// A Minecraft Java server advertises the icon from <root>/server-icon.png (64x64 PNG).
 /// Accept common image types, keep aspect ratio with a centred crop, and never touch worlds.
 fn prepare_minecraft_server_icon(dir: &Path, source: &Path) -> Result<(), String> {
     const MAX_ICON_BYTES: u64 = 16 * 1024 * 1024;
-    if !servers::java::is_java(dir) {
+    if !supports_minecraft_server_icon(dir) {
         return Err("Server icons can only be installed on Java Edition servers.".into());
     }
     let size = std::fs::metadata(source)
@@ -2296,6 +2302,24 @@ impl Launcher {
                 button("server-folder", "Open the folder", Kind::Ghost, &t)
                     .on_click(move |_, _, cx| crate::glass_toast::open(cx, &folder)),
             )
+            .when(supports_minecraft_server_icon(dir), |d| {
+                d.child(
+                    button(
+                        "server-icon-quick",
+                        if dir.join("server-icon.png").is_file() {
+                            "Change server icon"
+                        } else {
+                            "Add server icon"
+                        },
+                        Kind::Secondary,
+                        &t,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.choose_server_icon(cx);
+                        cx.notify();
+                    })),
+                )
+            })
             .when(
                 servers::java::metadata(dir).ok()
                     .is_some_and(|meta| meta.software == servers::java::Software::Paper),
@@ -3158,7 +3182,7 @@ impl Launcher {
     /// the server protocol automatically publishes server-icon.png on its next start.
     fn choose_server_icon(&mut self, cx: &mut Context<Self>) {
         let Some(dir) = self.servers.open.clone() else { return };
-        if !servers::java::is_java(&dir) { return; }
+        if !supports_minecraft_server_icon(&dir) { return; }
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -3192,7 +3216,7 @@ impl Launcher {
 
     fn remove_server_icon(&mut self, cx: &mut Context<Self>) {
         let Some(dir) = self.servers.open.clone() else { return };
-        if !servers::java::is_java(&dir) { return; }
+        if !supports_minecraft_server_icon(&dir) { return; }
         match std::fs::remove_file(dir.join("server-icon.png")) {
             Ok(()) => {
                 self.invalidate_server_icon(&dir);
@@ -3311,8 +3335,8 @@ impl Launcher {
                 }
             }
             let runtime_picker = self.server_java_picker(cx);
-            // The glass page already shows this card beside the server list.
-            let icon_panel = (!t.glass).then(|| self.glass_server_icon(cx));
+            // Keep the chooser in Settings even if the side panel is offscreen.
+            let icon_panel = Some(self.glass_server_icon(cx));
             let save_runtime = button("server-java-save", "Save Java runtime", Kind::Primary, &t);
             let can_save = !status.running() && self.servers.busy.is_none();
             let save_runtime = if can_save {

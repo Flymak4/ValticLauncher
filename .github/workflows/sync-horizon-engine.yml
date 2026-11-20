@@ -87,7 +87,10 @@ jobs:
             # the Valtic mod browser is explicitly migrated and rebuilt.
             ':(exclude)crates/horizon-mods/**'
             ':(exclude)crates/horizon-client/src/game/window_handler.rs'
-            ':(exclude)crates/horizon-client/src/game/split/windows.rs'
+            # Valtic's engine-point generator still needs the full split tree.
+            # Upstream deletes split modules, leaving a partial directory,
+            # so do not sync the split subtree until it is ported deliberately.
+            ':(exclude)crates/horizon-client/src/game/split/**'
             ':(exclude)crates/horizon-client/src/game/startup_menu.rs'
             ':(exclude)crates/horizon-client/src/game/world_entry.rs'
           )
