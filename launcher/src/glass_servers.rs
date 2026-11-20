@@ -766,7 +766,7 @@ impl Launcher {
 
     /// Dedicated per-server icon chooser. Minecraft uses the 64x64 PNG in the server root
     /// for the icon in Multiplayer > Server List, without any server.properties icon key.
-    fn glass_server_icon(&mut self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn glass_server_icon(&mut self, cx: &mut Context<Self>) -> Div {
         let Some(dir) = self.servers.open.clone() else { return div() };
         let t = self.theme;
         let installed = dir.join("server-icon.png").is_file();
