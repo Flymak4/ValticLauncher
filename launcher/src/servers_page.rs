@@ -165,10 +165,14 @@ const DIFFICULTIES: [(&str, &str); 4] = [
 pub(super) enum Event {
     Polled {
         dir: PathBuf,
+        generation: u64,
         status: Box<Status>,
         logs: Option<(u64, Vec<String>)>,
     },
-    Statuses(Vec<(PathBuf, Status)>),
+    Statuses {
+        generation: u64,
+        all: Vec<(PathBuf, Status)>,
+    },
     Line(String),
     Done(Result<String, Problem>),
     Created(Result<Entry, Problem>),
@@ -279,6 +283,8 @@ pub(super) struct Servers {
     log: VecDeque<String>,
     log_next: u64,
     log_dir: Option<PathBuf>,
+    /// Invalidates in-flight polls whenever a server or console session changes.
+    poll_generation: u64,
     console_scroll: Scrollbar,
     create_scroll: Scrollbar,
     /// The action under way, and what it printed.
@@ -335,6 +341,7 @@ impl Servers {
             log: VecDeque::new(),
             log_next: 0,
             log_dir: None,
+            poll_generation: 0,
             console_scroll: Scrollbar::default(),
             create_scroll: Scrollbar::default(),
             busy: None,
@@ -630,10 +637,18 @@ impl Launcher {
         s.texts.remove(&Field::Port);
         s.texts.remove(&Field::ServerJavaExecutable);
         s.invalid = None;
+        // A new selection starts a new console session. Skip historical logs;
+        // opening a stopped server must not replay an old boot as live output.
+        s.poll_generation = s.poll_generation.wrapping_add(1);
+        s.polling = false;
         s.polled = None;
         s.log.clear();
-        s.log_next = 0;
-        s.log_dir = None;
+        s.log_next = if servers::java::is_java(&dir) {
+            servers::java::log_size(&dir)
+        } else {
+            0
+        };
+        s.log_dir = Some(dir);
         self.load_details();
     }
 
@@ -661,6 +676,7 @@ impl Launcher {
         self.servers.polled = Some(Instant::now());
         self.servers.polling = true;
         let tx = self.servers.tx.clone();
+        let generation = self.servers.poll_generation;
         match self.servers.open.clone() {
             Some(dir) => {
                 let since = if self.servers.log_dir.as_ref() == Some(&dir) {
@@ -679,6 +695,7 @@ impl Launcher {
                     };
                     let _ = tx.send(Event::Polled {
                         dir,
+                        generation,
                         status: Box::new(status),
                         logs,
                     });
@@ -694,7 +711,7 @@ impl Launcher {
                             (d, s)
                         })
                         .collect();
-                    let _ = tx.send(Event::Statuses(all));
+                    let _ = tx.send(Event::Statuses { generation, all });
                 });
             }
         }
@@ -704,9 +721,11 @@ impl Launcher {
     fn servers_event(&mut self, event: Event) -> bool {
         let s = &mut self.servers;
         match event {
-            Event::Polled { dir, status, logs } => {
-                if s.open.as_ref() != Some(&dir) {
-                    s.polling = false;
+            Event::Polled { dir, generation, status, logs } => {
+                // Ignore a poll started before Start/Restart, or before the
+                // player selected a different server. Its byte cursor belongs
+                // to an old session and can otherwise freeze the live console.
+                if generation != s.poll_generation || s.open.as_ref() != Some(&dir) {
                     return false;
                 }
                 s.polling = false;
@@ -745,7 +764,10 @@ impl Launcher {
                 }
                 changed
             }
-            Event::Statuses(all) => {
+            Event::Statuses { generation, all } => {
+                if generation != s.poll_generation || s.open.is_some() {
+                    return false;
+                }
                 s.polling = false;
                 let mut changed = false;
                 for (dir, status) in all {
@@ -1034,6 +1056,9 @@ impl Launcher {
         } else {
             0
         };
+        // Invalidate any old worker still reading the old offset.
+        s.poll_generation = s.poll_generation.wrapping_add(1);
+        s.polling = false;
         s.polled = None;
     }
 
@@ -2091,6 +2116,8 @@ impl Launcher {
                         .hover(move |s| s.text_color(t.ink))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.servers.open = None;
+                            this.servers.poll_generation = this.servers.poll_generation.wrapping_add(1);
+                            this.servers.polling = false;
                             this.servers.polled = None;
                             this.servers.problem = None;
                             this.servers.note = None;
