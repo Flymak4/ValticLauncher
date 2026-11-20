@@ -58,6 +58,7 @@ impl Launcher {
             .w(px(SIDE))
             .gap(px(10.))
             .child(self.glass_server_list(cx))
+            .children(open.is_some().then(|| self.glass_server_usage(&status)))
             .children(open.is_some().then(|| self.glass_addresses(&status, cx)));
         let mut page = div().flex().flex_col().child(head).child(
             div()
@@ -751,6 +752,70 @@ impl Launcher {
                 cx.notify();
             }))
         })
+    }
+
+    /// Live CPU and RAM read from the same server status as the Overview, not whole-PC stats.
+    /// The open server is refreshed by the existing one-second polling loop.
+    fn glass_server_usage(&self, status: &Status) -> Div {
+        let running = status.running();
+        let cpu = status.cpu_percent.filter(|_| running);
+        let ram = status.ram_bytes.filter(|_| running);
+        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+        // Java's configured -Xmx supplies a useful reference for the bar. Non-Java servers
+        // still show live usage even when there is no known RAM budget.
+        let ram_limit_gib = self.servers.open.as_deref()
+            .filter(|dir| servers::java::is_java(dir))
+            .and_then(|dir| servers::java::metadata(dir).ok())
+            .map(|metadata| metadata.ram_gb as f64)
+            .filter(|limit| *limit > 0.0);
+        let cpu_label = cpu.map_or_else(|| "—".to_string(), |v| format!("{v:.1}%"));
+        let ram_label = match (ram, ram_limit_gib) {
+            (Some(bytes), Some(limit)) => format!("{:.2} / {limit:.0} GiB", bytes as f64 / GIB),
+            (Some(bytes), None) => format!("{:.2} GiB", bytes as f64 / GIB),
+            _ => "—".to_string(),
+        };
+        let cpu_fill = cpu.map(|v| v / 100.0);
+        let ram_fill = ram.and_then(|bytes| {
+            ram_limit_gib.map(|limit| bytes as f64 / (GIB * limit))
+        });
+        let metric = |label: &'static str, value: String, ratio: Option<f64>| {
+            let width = (280.0 * ratio.unwrap_or(0.0).clamp(0.0, 1.0)) as f32;
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(7.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(8.))
+                        .child(ui::text(13., FontWeight::MEDIUM, ink::BODY).child(tr(label)))
+                        .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL).child(value)),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(5.))
+                        .rounded(px(4.))
+                        .bg(white(0.12))
+                        .child(
+                            div()
+                                .w(px(width))
+                                .h(px(5.))
+                                .rounded(px(4.))
+                                .bg(white(0.85)),
+                        ),
+                )
+        };
+        glass::plate(radius::PANEL)
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .p(px(20.))
+            .child(ui::card_heading(tr("Server usage")))
+            .child(metric("CPU", cpu_label, cpu_fill))
+            .child(metric("RAM", ram_label, ram_fill))
     }
 
     /// How friends reach the open server: on this network, over the internet (Tailscale), and who
