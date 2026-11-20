@@ -1043,7 +1043,7 @@ fn read_log_chunk(path: &Path, since: u64) -> Option<(u64, Vec<String>)> {
     file.seek(SeekFrom::Start(offset)).ok()?;
     let mut data = Vec::new();
     file.take(MAX_READ as u64).read_to_end(&mut data).ok()?;
-    let complete = data.iter().rposition(|&byte| byte == b'\\n')
+    let complete = data.iter().rposition(|&byte| byte == b'\n')
         .map(|index| index + 1)
         .unwrap_or_else(|| if data.len() == MAX_READ { data.len() } else { 0 });
     let lines = String::from_utf8_lossy(&data[..complete])
