@@ -1014,15 +1014,31 @@ pub fn kill(dir: &Path) -> Result<String, Problem> {
     active.remove(dir);
     Ok("Java server was killed. Unsaved world changes may be lost.".into())
 }
+/// Byte offset for the next fresh console session. Java appends to the same
+/// file across restarts, so replaying from zero would show old boot messages.
+pub fn log_size(dir: &Path) -> u64 {
+    fs::metadata(dir.join("logs/valtic-console.log"))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
 pub fn logs(dir: &Path, since: u64) -> Option<(u64, Vec<String>)> {
+    const MAX_READ: usize = 256 * 1024;
     let mut file = File::open(dir.join("logs/valtic-console.log")).ok()?;
     let size = file.metadata().ok()?.len();
+    // The file can be truncated or replaced between polls.
     let offset = if since > size { 0 } else { since };
     file.seek(SeekFrom::Start(offset)).ok()?;
-    let mut data = String::new();
-    file.take(256 * 1024).read_to_string(&mut data).ok()?;
-    let complete = data.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let lines = data[..complete].lines().map(str::to_owned).collect();
+    let mut data = Vec::new();
+    file.take(MAX_READ as u64).read_to_end(&mut data).ok()?;
+    // Do not try to decode the unfinished tail of a UTF-8 character/line.
+    // A partial UTF-8 sequence at the 256 KiB boundary must not freeze polling.
+    let complete = data.iter().rposition(|&byte| byte == b'\n')
+        .map(|index| index + 1)
+        // Exceptionally long lines must still make forward progress.
+        .unwrap_or_else(|| if data.len() == MAX_READ { data.len() } else { 0 });
+    let lines = String::from_utf8_lossy(&data[..complete])
+        .lines().map(str::to_owned).collect();
     Some((offset + complete as u64, lines))
 }
 
@@ -1231,6 +1247,45 @@ mod tests {
         assert_eq!(java_program(""), "java");
         assert_eq!(java_program("  "), "java");
         assert_eq!(java_program(r#""C:\jdk-21\bin\java.exe""#), r"C:\jdk-21\bin\java.exe");
+    }
+
+    #[test]
+    fn console_logs_keep_streaming_through_invalid_utf8() {
+        let dir = std::env::temp_dir().join(format!(
+            "valtic-java-console-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("logs")).unwrap();
+        fs::write(dir.join("logs/valtic-console.log"), b"booting\n\xffserver ready\n").unwrap();
+
+        let (next, first) = logs(&dir, 0).unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0], "booting");
+        assert!(first[1].contains("server ready"));
+        fs::write(dir.join("logs/valtic-console.log"), b"restarted\n").unwrap();
+        let (_, fresh) = logs(&dir, next).unwrap();
+        assert_eq!(fresh, ["restarted"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn console_logs_advance_past_oversized_line() {
+        let dir = std::env::temp_dir().join(format!(
+            "valtic-java-large-console-{}-{:?}", std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("logs")).unwrap();
+        let mut bytes = vec![b'x'; 256 * 1024 + 3];
+        bytes.extend_from_slice(b"\nfinished\n");
+        fs::write(dir.join("logs/valtic-console.log"), bytes).unwrap();
+        let (next, first) = logs(&dir, 0).unwrap();
+        assert!(next > 0);
+        assert_eq!(first.len(), 1);
+        let (_, tail) = logs(&dir, next).unwrap();
+        assert_eq!(tail.last().map(String::as_str), Some("finished"));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
