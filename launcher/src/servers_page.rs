@@ -3311,6 +3311,8 @@ impl Launcher {
                 }
             }
             let runtime_picker = self.server_java_picker(cx);
+            // The glass page already shows this card beside the server list.
+            let icon_panel = (!t.glass).then(|| self.glass_server_icon(cx));
             let save_runtime = button("server-java-save", "Save Java runtime", Kind::Primary, &t);
             let can_save = !status.running() && self.servers.busy.is_none();
             let save_runtime = if can_save {
@@ -3321,6 +3323,7 @@ impl Launcher {
             } else { disabled(save_runtime).into_any_element() };
             return div().flex().flex_col().gap(px(14.))
                 .child(div().flex().child(edit))
+                .children(icon_panel)
                 .child(text(theme::UI).text_color(t.ink).child("Java runtime"))
                 .children(current.as_ref().map(|meta| text(theme::CAPTION).text_color(t.muted)
                     .child(format!("Currently saved: {}", if meta.java_executable.is_empty() {
