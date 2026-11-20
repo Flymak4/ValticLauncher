@@ -516,22 +516,25 @@ fn uptime(secs: u64) -> String {
 fn launch_java_with_playit(dir: &Path) -> Result<String, Problem> {
     servers::java::ensure_voice_chat(dir, &|_line| {})?;
     let meta = servers::java::metadata(dir).map_err(Problem::plain)?;
-    let tunnels = servers::connectivity::prepare(dir);
-    servers::addons::configure_network(
-        dir, meta.software, meta.voice_port,
-        tunnels.as_ref().ok().and_then(|t| t.voice_address.as_deref()),
-        meta.geyser_port,
-    ).map_err(Problem::plain)?;
+    // Start Minecraft first. Remote tunnel discovery can take a long time (or
+    // fail entirely), but it must never block the local server or its console.
     let note = servers::java::start(dir)?;
-    match tunnels {
-        Ok(info) => {
-            servers::connectivity::monitor(dir.to_path_buf(), info);
-            Ok(note)
+    let dir = dir.to_path_buf();
+    std::thread::spawn(move || {
+        let tunnels = servers::connectivity::prepare(&dir);
+        if let Err(reason) = servers::addons::configure_network(
+            &dir, meta.software, meta.voice_port,
+            tunnels.as_ref().ok().and_then(|t| t.voice_address.as_deref()),
+            meta.geyser_port,
+        ) {
+            eprintln!("Valtic server network configuration: {reason}");
         }
-        Err(reason) => Err(Problem::plain(format!(
-            "{note}. The server is running. Playit's API could not confirm or manage the tunnel: {reason} If an existing Playit address works, it may still be reachable. Remote voice chat needs its own UDP tunnel."
-        ))),
-    }
+        match tunnels {
+            Ok(info) => servers::connectivity::monitor(dir, info),
+            Err(reason) => eprintln!("Valtic server tunnel unavailable: {reason}"),
+        }
+    });
+    Ok(note)
 }
 
 impl Launcher {
@@ -2470,7 +2473,19 @@ impl Launcher {
                     .child(l.clone())
             })
             .collect();
-        let empty = self.servers.log.is_empty();
+        // Show Start/Restart activity immediately, even before Minecraft has
+        // written its first log line. The job runs independently of log polling.
+        let mut lines = lines;
+        if let Some(activity) = &self.servers.busy {
+            lines.push(div().text_color(t.accent).child(format!("[Valtic] {activity}…")));
+        }
+        for message in &self.servers.job_log {
+            lines.push(div().text_color(t.muted).child(format!("[Valtic] {message}")));
+        }
+        if let Some(note) = &self.servers.note {
+            lines.push(div().text_color(t.muted).child(format!("[Valtic] {note}")));
+        }
+        let empty = lines.is_empty();
         let log = div()
             .id("server-console")
             .h(px(240.))
