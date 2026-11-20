@@ -631,6 +631,9 @@ impl Launcher {
         s.texts.remove(&Field::ServerJavaExecutable);
         s.invalid = None;
         s.polled = None;
+        s.log.clear();
+        s.log_next = 0;
+        s.log_dir = None;
         self.load_details();
     }
 
@@ -702,6 +705,10 @@ impl Launcher {
         let s = &mut self.servers;
         match event {
             Event::Polled { dir, status, logs } => {
+                if s.open.as_ref() != Some(&dir) {
+                    s.polling = false;
+                    return false;
+                }
                 s.polling = false;
                 let mut changed = false;
                 let was = s.statuses.get(&dir).map(|st| st.phase.clone());
@@ -1015,10 +1022,29 @@ impl Launcher {
         });
     }
 
+    /// A restart of the native supervisor resets its log sequence. Java, on
+    /// the other hand, appends to a persistent file: begin at its current EOF.
+    /// Clear previous output so the next boot has its own visible session.
+    fn reset_server_console(&mut self, dir: &Path) {
+        let s = &mut self.servers;
+        s.log.clear();
+        s.log_dir = Some(dir.to_path_buf());
+        s.log_next = if servers::java::is_java(dir) {
+            servers::java::log_size(dir)
+        } else {
+            0
+        };
+        s.polled = None;
+    }
+
     fn start_server(&mut self) {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        if self.servers.busy.is_some() {
+            return;
+        }
+        self.reset_server_console(&dir);
         self.servers.confirm_kill = false;
         STARTED_HERE.lock().unwrap().push(dir.clone());
         self.servers.restart_needed.clear();
@@ -1100,6 +1126,10 @@ impl Launcher {
         let Some(dir) = self.servers.open.clone() else {
             return;
         };
+        if self.servers.busy.is_some() {
+            return;
+        }
+        self.reset_server_console(&dir);
         self.servers.confirm_kill = false;
         if servers::java::is_java(&dir) {
             self.server_job("Restarting Java server", move |_log| {
