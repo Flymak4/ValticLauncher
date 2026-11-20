@@ -983,9 +983,10 @@ fn process_usage(running: &mut Running) -> (Option<u64>, Option<f64>) {
 
     let handle = running.child.as_raw_handle();
     let mut memory_info: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
-    memory_info.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    let counter_size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    memory_info.cb = counter_size;
     let memory = (unsafe {
-        GetProcessMemoryInfo(handle, &mut memory_info, memory_info.cb)
+        GetProcessMemoryInfo(handle, &mut memory_info, counter_size)
     } != 0).then_some(memory_info.WorkingSetSize as u64);
 
     let mut created: FILETIME = unsafe { std::mem::zeroed() };
