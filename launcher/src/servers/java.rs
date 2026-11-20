@@ -10,7 +10,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const META: &str = "valtic-server.json";
 const MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
@@ -79,6 +79,9 @@ pub enum Launch {
 struct Running {
     child: Child,
     started: Instant,
+    /// Wall-clock start time, used to avoid replaying the previous run's
+    /// Minecraft latest.log when the captured stdout is quiet.
+    started_wall: SystemTime,
 }
 static RUNNING: LazyLock<Mutex<HashMap<PathBuf, Running>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -938,7 +941,11 @@ pub fn start(dir: &Path) -> Result<String, Problem> {
     let child = crate::process::command(java).current_dir(dir).args(launch_args(&meta))
         .stdin(Stdio::piped()).stdout(Stdio::from(file)).stderr(Stdio::from(err))
         .spawn().map_err(|e| Problem::plain(format!("Failed to launch Java: {e}")))?;
-    active.insert(dir.to_owned(), Running { child, started: Instant::now() });
+    active.insert(dir.to_owned(), Running {
+        child,
+        started: Instant::now(),
+        started_wall: SystemTime::now(),
+    });
     Ok(format!("Starting {} {} on port {}", meta.software.label(), meta.minecraft_version, meta.port))
 }
 /// Move only an inactive, registered Java server folder to the Recycle Bin.
@@ -1022,24 +1029,60 @@ pub fn log_size(dir: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-pub fn logs(dir: &Path, since: u64) -> Option<(u64, Vec<String>)> {
+// This bit is reserved for the fallback Minecraft log cursor. Console log
+// files will never approach 8 EiB, so it cannot conflict with a byte offset.
+const MINECRAFT_LOG_CURSOR: u64 = 1 << 63;
+
+/// Read a single complete batch, retaining any unfinished final line for the
+/// next poll. A long unbroken line is still consumed in bounded chunks.
+fn read_log_chunk(path: &Path, since: u64) -> Option<(u64, Vec<String>)> {
     const MAX_READ: usize = 256 * 1024;
-    let mut file = File::open(dir.join("logs/valtic-console.log")).ok()?;
+    let mut file = File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
-    // The file can be truncated or replaced between polls.
     let offset = if since > size { 0 } else { since };
     file.seek(SeekFrom::Start(offset)).ok()?;
     let mut data = Vec::new();
     file.take(MAX_READ as u64).read_to_end(&mut data).ok()?;
-    // Do not try to decode the unfinished tail of a UTF-8 character/line.
-    // A partial UTF-8 sequence at the 256 KiB boundary must not freeze polling.
-    let complete = data.iter().rposition(|&byte| byte == b'\n')
+    let complete = data.iter().rposition(|&byte| byte == b'\\n')
         .map(|index| index + 1)
-        // Exceptionally long lines must still make forward progress.
         .unwrap_or_else(|| if data.len() == MAX_READ { data.len() } else { 0 });
     let lines = String::from_utf8_lossy(&data[..complete])
         .lines().map(str::to_owned).collect();
     Some((offset + complete as u64, lines))
+}
+
+/// Follow the launcher-captured stdout, falling back to Minecraft's own
+/// latest.log if the process writes there but stops emitting on stdout.
+/// The fallback only activates when latest.log was actually updated *after*
+/// this launch, avoiding the illusion of a server running before Start.
+pub fn logs(dir: &Path, since: u64) -> Option<(u64, Vec<String>)> {
+    let captured = dir.join("logs/valtic-console.log");
+    let latest = dir.join("logs/latest.log");
+    if since & MINECRAFT_LOG_CURSOR != 0 {
+        return read_log_chunk(&latest, since & !MINECRAFT_LOG_CURSOR)
+            .map(|(next, lines)| (next | MINECRAFT_LOG_CURSOR, lines))
+            .or_else(|| read_log_chunk(&captured, 0));
+    }
+    let from_stdout = read_log_chunk(&captured, since);
+    if from_stdout.as_ref().is_some_and(|(_, lines)| !lines.is_empty()) {
+        return from_stdout;
+    }
+    let started = RUNNING.lock().ok().and_then(|active| {
+        active.get(dir).map(|process| process.started_wall)
+    });
+    let minecraft_newer = started.is_some_and(|started| {
+        let latest_changed = fs::metadata(&latest).and_then(|m| m.modified()).ok();
+        let captured_changed = fs::metadata(&captured).and_then(|m| m.modified()).ok();
+        latest_changed.is_some_and(|latest_at| {
+            latest_at > started && captured_changed.is_none_or(|captured_at| latest_at > captured_at)
+        })
+    });
+    if minecraft_newer {
+        if let Some((next, lines)) = read_log_chunk(&latest, 0) {
+            return Some((next | MINECRAFT_LOG_CURSOR, lines));
+        }
+    }
+    from_stdout
 }
 
 const SETUP_ONLY_PROPERTIES: &[&str] = &[
