@@ -88,8 +88,11 @@ jobs:
             ':(exclude)crates/horizon-mods/**'
             ':(exclude)crates/horizon-client/src/game/window_handler.rs'
             # Valtic's engine-point generator still needs the full split tree.
-            # Upstream deletes split modules, leaving a partial directory,
-            # so do not sync the split subtree until it is ported deliberately.
+            # Upstream removes the legacy split.rs root as well as children. A
+            # generated game-module area cannot replace its type definitions, so
+            # preserve BOTH the root and its submodules until ported together.
+            # Keep the .game-area marker alongside our preserved sources.
+            ':(exclude)crates/horizon-client/src/game/split.rs'
             ':(exclude)crates/horizon-client/src/game/split/**'
             ':(exclude)crates/horizon-client/src/game/startup_menu.rs'
             ':(exclude)crates/horizon-client/src/game/world_entry.rs'
