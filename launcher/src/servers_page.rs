@@ -2423,10 +2423,17 @@ impl Launcher {
             ))
             .child(tile(
                 status
+                    .cpu_percent
+                    .filter(|_| on)
+                    .map_or_else(dash, |v| format!("{v:.1}%")),
+                "CPU usage",
+            ))
+            .child(tile(
+                status
                     .ram_bytes
                     .filter(|_| on)
                     .map_or_else(dash, |b| format!("{:.2} GB", b as f64 / 1e9)),
-                "RAM",
+                "RAM usage",
             ))
     }
 
