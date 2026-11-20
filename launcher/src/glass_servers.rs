@@ -510,7 +510,14 @@ impl Launcher {
     /// The console (`Logs`, 320 px) or its empty box, and the command line under it.
     fn glass_server_console(&mut self, running: bool, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let body = if self.servers.log.is_empty() {
+        // Include launcher activity before the Java process has written to disk,
+        // so Start/Restart never leave this console looking frozen.
+        let has_output = !self.servers.log.is_empty()
+            || self.servers.busy.is_some()
+            || !self.servers.job_log.is_empty()
+            || self.servers.note.is_some()
+            || self.servers.problem.is_some();
+        let body = if !has_output {
             div()
                 .flex()
                 .flex_col()
@@ -531,7 +538,7 @@ impl Launcher {
                 )
                 .into_any_element()
         } else {
-            let lines: Vec<Div> = self
+            let mut lines: Vec<Div> = self
                 .servers
                 .log
                 .iter()
@@ -543,6 +550,22 @@ impl Launcher {
                         .child(l.clone())
                 })
                 .collect();
+            if let Some(activity) = &self.servers.busy {
+                lines.push(div().text_color(ui::color(self.look.accent_soft))
+                    .child(format!("[Valtic] {activity}…")));
+            }
+            for line in &self.servers.job_log {
+                lines.push(div().text_color(white(ink::NOTE))
+                    .child(format!("[Valtic] {line}")));
+            }
+            if let Some(note) = &self.servers.note {
+                lines.push(div().text_color(white(ink::NOTE))
+                    .child(format!("[Valtic] {note}")));
+            }
+            if let Some(problem) = &self.servers.problem {
+                lines.push(div().text_color(ui::danger())
+                    .child(format!("[Valtic] {}", problem.message)));
+            }
             let log = div()
                 .id("server-console")
                 .h(px(320.))
