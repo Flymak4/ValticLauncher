@@ -440,6 +440,51 @@ impl Servers {
     }
 }
 
+/// A Minecraft Java server advertises the icon from <root>/server-icon.png (64x64 PNG).
+/// Accept common image types, keep aspect ratio with a centred crop, and never touch worlds.
+fn prepare_minecraft_server_icon(dir: &Path, source: &Path) -> Result<(), String> {
+    const MAX_ICON_BYTES: u64 = 16 * 1024 * 1024;
+    if !servers::java::is_java(dir) {
+        return Err("Server icons can only be installed on Java Edition servers.".into());
+    }
+    let size = std::fs::metadata(source)
+        .map_err(|e| format!("Cannot open image: {e}"))?.len();
+    if size > MAX_ICON_BYTES {
+        return Err("Choose an image smaller than 16 MB.".into());
+    }
+    let mut reader = image::ImageReader::open(source)
+        .map_err(|e| format!("Cannot open image: {e}"))?
+        .with_guessed_format()
+        .map_err(|e| format!("Cannot identify image format: {e}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    reader.limits(limits);
+    let picture = reader.decode().map_err(|e| format!("Cannot read image: {e}"))?;
+    if picture.width() == 0 || picture.height() == 0 {
+        return Err("The image has no pixels.".into());
+    }
+    let filter = if picture.width() < 64 || picture.height() < 64 {
+        image::imageops::FilterType::Nearest
+    } else {
+        image::imageops::FilterType::Lanczos3
+    };
+    let cropped = picture.resize_to_fill(64, 64, filter);
+    let mut png = std::io::Cursor::new(Vec::<u8>::new());
+    cropped.write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| format!("Cannot convert image to PNG: {e}"))?;
+
+    let target = dir.join("server-icon.png");
+    let temporary = dir.join(".valtic-server-icon.png.tmp");
+    std::fs::write(&temporary, png.into_inner())
+        .map_err(|e| format!("Cannot write server icon: {e}"))?;
+    // Replace the old icon after a complete PNG has been written.
+    let saved = std::fs::copy(&temporary, &target)
+        .map_err(|e| format!("Cannot save server icon: {e}"));
+    let _ = std::fs::remove_file(temporary);
+    saved.map(|_| ())
+}
+
 /// Stops the servers this launcher started, unless they run in the background as a service.
 pub(super) fn stop_on_quit() {
     for dir in STARTED_HERE.lock().unwrap().drain(..) {
@@ -3086,6 +3131,85 @@ impl Launcher {
             ));
         }
         page
+    }
+
+    /// Reads this server's public Minecraft icon, including when the player imports an
+    /// existing Java server. Cache entries are invalidated after an icon change.
+    fn server_icon_image(
+        &mut self,
+        dir: &Path,
+        size: f32,
+    ) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        self.icon_image(
+            format!("server-icon:{}", dir.display()),
+            size,
+            true,
+            || std::fs::read(dir.join("server-icon.png")).ok(),
+        )
+    }
+
+    fn invalidate_server_icon(&mut self, dir: &Path) {
+        let prefix = format!("server-icon:{}", dir.display());
+        self.instances.icons.retain(|(key, _), _| key != &prefix);
+    }
+
+    /// Opens a native image picker, then converts the chosen image to Minecraft Java's
+    /// required 64x64 PNG in the server root. Nothing is added to server.properties:
+    /// the server protocol automatically publishes server-icon.png on its next start.
+    fn choose_server_icon(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = self.servers.open.clone() else { return };
+        if !servers::java::is_java(&dir) { return; }
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose server icon".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else { return };
+            let Some(source) = paths.into_iter().next() else { return };
+            let target_dir = dir.clone();
+            let result = cx.background_executor()
+                .spawn(async move { prepare_minecraft_server_icon(&target_dir, &source) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.invalidate_server_icon(&dir);
+                match result {
+                    Ok(()) => {
+                        this.servers.problem = None;
+                        this.servers.note = Some(
+                            "Server icon saved as server-icon.png (64x64). Restart the Minecraft server to show it in the multiplayer list.".into()
+                        );
+                    }
+                    Err(error) => {
+                        this.servers.problem = Some(Problem::plain(error));
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    fn remove_server_icon(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = self.servers.open.clone() else { return };
+        if !servers::java::is_java(&dir) { return; }
+        match std::fs::remove_file(dir.join("server-icon.png")) {
+            Ok(()) => {
+                self.invalidate_server_icon(&dir);
+                self.servers.problem = None;
+                self.servers.note = Some(
+                    "Server icon removed. Restart the Minecraft server to restore its default icon in the multiplayer list.".into()
+                );
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.invalidate_server_icon(&dir);
+                self.servers.note = Some("This server already uses Minecraft's default icon.".into());
+            }
+            Err(error) => self.servers.problem = Some(Problem::plain(
+                format!("Could not remove server icon: {error}")
+            )),
+        }
+        cx.notify();
     }
 
     /// Let the server owner browse for java.exe instead of editing Windows PATH.
