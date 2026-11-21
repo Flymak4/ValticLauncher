@@ -2,14 +2,24 @@
 //! an adapter that can't present to the window gives way to another of its backend
 //! (#13493).
 use super::{
-    Renderer, check_layers, cull, describe_adapter, is_software, oit, startup_step, surface_format,
-    timing,
+    Renderer, check_layers, cull, describe_adapter, is_software, oit, pack_timing, startup_step,
+    surface_format, timing,
 };
-// Ray tracing on request, which the device needs from its creation (gfx.rs may not grow).
-#[path = "ray_query.rs"]
-mod ray_query;
+// Mesh shader capability negotiation on request (spec #17243 step 1).
+#[path = "mesh_shader.rs"]
+pub(super) mod mesh_shader;
 use std::sync::Arc;
 use winit::window::Window;
+
+/// Video memory the allocator shares out in blocks of 4-16 MiB (Vulkan and DirectX 12); a
+/// buffer or texture larger than a block gets a block of exactly its size, which is freed
+/// with it. With blocks of 8-64 MiB (`MemoryHints::MemoryUsage`) the size grew with each
+/// block opened, and the few small buffers that live all session (section tests, clouds,
+/// the staging belt) each kept a 32 or 64 MiB block from being freed: some 140 of 540 MB
+/// reserved were empty in a loaded world at render distance 12 (#15723).
+pub(super) const MEMORY_HINTS: wgpu::MemoryHints = wgpu::MemoryHints::Manual {
+    suballocated_device_memory_block_size: 4 << 20..16 << 20,
+};
 
 /// Sets the window surface up on `device`: the swapchain format (`surface_format`), the
 /// copies screenshots and frame generation make, and Mailbox when the surface offers it
@@ -106,6 +116,22 @@ pub(super) struct Adapted {
     pub(super) device_lost: Arc<std::sync::atomic::AtomicBool>,
     pub(super) configured: Option<(wgpu::SurfaceConfiguration, wgpu::SurfaceCapabilities)>,
 }
+/// What the device has to offer from its creation: the sprite arrays' `layers`, and ray queries
+/// when the pack picked at startup declares `[ray_tracing]` (`rays`).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DeviceNeeds {
+    pub(super) layers: u32,
+    pub(super) rays: bool,
+}
+impl super::output::FrameRequest {
+    /// What a device opened for this request and `layers` sprite layers needs.
+    pub(super) fn needs(self, layers: u32) -> DeviceNeeds {
+        DeviceNeeds {
+            layers,
+            rays: self.ray_tracing,
+        }
+    }
+}
 /// Opens a device on `adapter` and configures the window's `surface` on it (none
 /// offscreen). An adapter the surface offers no format on fails before its device opens.
 pub(super) async fn open_adapter(
@@ -113,7 +139,7 @@ pub(super) async fn open_adapter(
     window: &Arc<Window>,
     surface: Option<&wgpu::Surface<'static>>,
     adapter: &wgpu::Adapter,
-    layers: u32,
+    needs: DeviceNeeds,
 ) -> std::result::Result<Adapted, AdapterFailure> {
     let caps = surface.map(|surface| surface.get_capabilities(adapter));
     if caps.as_ref().is_some_and(|caps| caps.formats.is_empty()) {
@@ -124,7 +150,7 @@ pub(super) async fn open_adapter(
     describe_adapter(adapter);
     let info = adapter.get_info();
     let limits = adapter.limits();
-    if let Err(e) = check_layers(adapter, layers) {
+    if let Err(e) = check_layers(adapter, needs.layers) {
         return Err(AdapterFailure::Failed(format!("{name}: {e}")));
     }
     // Mappable primary buffers: section pages that no longer fit in
@@ -135,9 +161,11 @@ pub(super) async fn open_adapter(
     // atomics on images: their buffers and images. Filtering 32-bit float textures: shader
     // packs' RGBA32F buffers, which GL filters and mipmaps. Count draws: GPU culling's (`gpu_culling`).
     let features = timing::GpuTimer::features(adapter)
+        | pack_timing::PassTiming::features(adapter)
         | cull::Cull::features(adapter)
         | oit::features(adapter)
-        | ray_query::features(adapter)
+        | super::rt::query::features(adapter, needs.rays)
+        | mesh_shader::features(adapter)
         | (adapter.features()
             & (wgpu::Features::INDIRECT_FIRST_INSTANCE
                 | wgpu::Features::MULTI_DRAW_INDIRECT_COUNT
@@ -166,11 +194,8 @@ pub(super) async fn open_adapter(
         label: Some("Horizon device"),
         required_features: features,
         required_limits: limits,
-        // Video memory in blocks of 8-64 MiB instead of 128-256 MiB (Vulkan and DirectX 12):
-        // with the larger blocks a few small buffers kept whole blocks the arena's pages had
-        // left, and over half the video memory reserved was unused (1,344 MiB for 500).
-        memory_hints: wgpu::MemoryHints::MemoryUsage,
-        experimental_features: ray_query::experimental(features),
+        memory_hints: MEMORY_HINTS,
+        experimental_features: mesh_shader::experimental(features),
         ..Default::default()
     };
     #[cfg(not(target_os = "macos"))]
@@ -220,6 +245,18 @@ pub(super) async fn open_adapter(
         device_lost,
         configured,
     })
+}
+/// Logs a sprite split below the CPU's (the GPU's limit), and warns when Metal's arrays grew
+/// past 512 layers (#12155), so a big pack's texture-corruption report ties to it (#8471).
+pub(super) fn log_sprite_split(info: &wgpu::AdapterInfo, split: u32, layers: u32) {
+    if info.backend == wgpu::Backend::Metal && split > 512 {
+        log::warn!(
+            "Horizon: {split}-layer Metal sprite arrays for {layers} on {}",
+            info.name
+        );
+    } else if split < super::sprite_split() {
+        log::info!("Horizon: {split} block textures per array (the GPU's limit)");
+    }
 }
 #[cfg(test)]
 mod tests {

@@ -100,6 +100,8 @@ pub struct ComputeProgram {
     pub notes: Vec<Error>,
     pub work_groups: Option<[u32; 3]>,
     pub work_groups_render: [f32; 2],
+    /// An indirect request overrides both direct work-group declarations.
+    pub indirect: Option<crate::IndirectDispatch>,
 }
 
 /// The uniforms a gbuffers program reads per draw (5.3's "D"), in a block of their own
@@ -861,6 +863,13 @@ fn resources(
 
 /// Translates a compute program (`.csh`).
 pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<Error>> {
+    translate_compute_dispatch(compute, None)
+}
+
+pub(crate) fn translate_compute_dispatch(
+    compute: &Preprocessed,
+    indirect: Option<crate::IndirectDispatch>,
+) -> Result<ComputeProgram, Vec<Error>> {
     let named = anonymous_structs::name(&compute.code).map(|code| Preprocessed {
         code,
         ..compute.clone()
@@ -905,10 +914,16 @@ pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<E
         }
         Some(v)
     };
-    let mut work_groups =
-        sizes("workGroups", &[3]).map(|v| [v[0] as u32, v[1] as u32, v[2] as u32]);
-    let work_groups_render =
-        sizes("workGroupsRender", &[2, 3]).map_or([1.0, 1.0], |v| [v[0] as f32, v[1] as f32]);
+    let mut work_groups = if indirect.is_none() {
+        sizes("workGroups", &[3]).map(|v| [v[0] as u32, v[1] as u32, v[2] as u32])
+    } else {
+        None
+    };
+    let work_groups_render = if indirect.is_none() {
+        sizes("workGroupsRender", &[2, 3]).map_or([1.0, 1.0], |v| [v[0] as f32, v[1] as f32])
+    } else {
+        [1.0, 1.0]
+    };
     let code = c.rewrite(&samplers, &uniforms);
     let mut folded = None;
     let code = match work_groups.map(|g| fold_work_groups(&code, g)) {
@@ -1011,6 +1026,7 @@ pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<E
         interface,
         work_groups,
         work_groups_render,
+        indirect,
     })
 }
 
@@ -3727,6 +3743,42 @@ in VertexData {{ {member} }} vIn;
     /// A work group size given as a constant expression (GLSL 4.60, 4.4 and 4.4.1), kept within
     /// the implementation's: the program compiles with its value.
     #[test]
+    fn quad_swaps_translate() {
+        let csh = "#version 460\n#extension GL_KHR_shader_subgroup_quad : enable\n\
+                   layout(local_size_x = 64) in;\n\
+                   layout(rgba16f) writeonly uniform image2D colorimg4;\n\
+                   void main() { vec4 v = vec4(gl_LocalInvocationID.x);\n\
+                   v = subgroupQuadSwapHorizontal(v) + subgroupQuadSwapVertical(v) \
+                   + subgroupQuadSwapDiagonal(v);\n\
+                   imageStore(colorimg4, ivec2(gl_GlobalInvocationID.xy), v); }\n";
+        let pack = Pack::from_zip_bytes("P.zip", zip(&[("shaders/deferred_a.csh", csh)])).unwrap();
+        let c = translate_compute(&preprocess(&pack, "deferred_a.csh", &Macros::standard()))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let mut swaps = Vec::new();
+        let m = &c.module;
+        let functions = m.functions.iter().map(|(_, f)| f);
+        for f in functions.chain([&m.entry_points[0].function]) {
+            for (statement, _) in f.body.span_iter() {
+                if let naga::Statement::SubgroupGather {
+                    mode: naga::GatherMode::QuadSwap(direction),
+                    ..
+                } = statement
+                {
+                    swaps.push(*direction);
+                }
+            }
+        }
+        assert_eq!(
+            swaps,
+            [
+                naga::Direction::X,
+                naga::Direction::Y,
+                naga::Direction::Diagonal
+            ]
+        );
+    }
+
+    #[test]
     fn a_work_group_size_may_be_a_constant_expression() {
         let csh = "#version 460\nlayout(local_size_x = min(gl_MaxComputeWorkGroupSize.x, 256), \
                    local_size_y = 1, local_size_z = 1) in;\n\
@@ -3737,6 +3789,19 @@ in VertexData {{ {member} }} vIn;
             .unwrap_or_else(|e| panic!("{e:?}"));
         let entry = &c.module.entry_points[0];
         assert_eq!(entry.workgroup_size, [256, 1, 1]);
+    }
+
+    #[test]
+    fn subgroup_ids_in_a_two_dimensional_work_group() {
+        let csh = "#version 460\n#extension GL_KHR_shader_subgroup_basic : enable\n\
+                   layout(local_size_x = 32, local_size_y = 16) in;\n\
+                   layout(r32ui) uniform uimage2D colorimg4;\n\
+                   void main() { imageStore(colorimg4, ivec2(gl_GlobalInvocationID.xy), \
+                   uvec4(gl_SubgroupID, gl_SubgroupInvocationID, 0u, 1u)); }\n";
+        let pack = Pack::from_zip_bytes("P.zip", zip(&[("shaders/deferred_a.csh", csh)])).unwrap();
+        let c = translate_compute(&preprocess(&pack, "deferred_a.csh", &Macros::standard()))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(c.module.entry_points[0].workgroup_size, [32, 16, 1]);
     }
 
     #[test]
@@ -4135,33 +4200,4 @@ in VertexData {{ {member} }} vIn;
 }
 
 #[cfg(test)]
-mod image_parameter_tests {
-    use crate::{Macros, Pack, preprocess, translate_compute};
-    #[test]
-    fn nested_image_helpers_specialize_multiple_storage_formats() {
-        let src = "#version 430\nlayout(local_size_x=1)in;layout(rgba16f) uniform image3D imageA;layout(r32f) uniform image3D imageB;void write_value(writeonly image3D img,ivec3 p){imageStore(img,p,vec4(0.5));}\nvoid nested(image3D img,ivec3 p){write_value(img,p);}\nvoid main(){nested(imageA,ivec3(0));nested(imageB,ivec3(0));}";
-        let pack = Pack::from_zip_bytes(
-            "formats.zip",
-            crate::pack::tests::zip(&[("shaders/setup.csh", src)]),
-        )
-        .unwrap();
-        let result = translate_compute(&preprocess(&pack, "setup.csh", &Macros::standard()));
-        assert!(result.is_ok(), "{:?}", result.err());
-    }
-}
-
-#[cfg(test)]
-mod mixed_integer_bounds_tests {
-    #[test]
-    fn compute_clamp_with_signed_index_and_unsigned_bounds_compiles() {
-        let source = "#version 430\nlayout(local_size_x=1) in; layout(std430,binding=0) buffer Data{uint result;};void main(){int index=int(gl_LocalInvocationID.x);result=clamp(index,0u,47u);}";
-        let pack = crate::Pack::from_zip_bytes(
-            "integer-bounds.zip",
-            crate::pack::tests::zip(&[("shaders/setup.csh", source)]),
-        )
-        .unwrap();
-        let stage = crate::preprocess(&pack, "setup.csh", &crate::Macros::standard());
-        let result = crate::translate_compute(&stage);
-        assert!(result.is_ok(), "{:?}", result.err());
-    }
-}
+mod image_parameter_and_mixed_integer_bounds_tests;
