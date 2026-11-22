@@ -146,6 +146,7 @@ impl Launcher {
     pub(super) fn glass_library(&mut self, cx: &mut Context<Self>) -> Div {
         let mut cards: Vec<AnyElement> = Vec::new();
         for instance in self.instances.list.clone() {
+            if horizon_launcher::valtic_smp::is_smp(&instance) { continue; }
             let opened = self.library_managing.as_deref() == Some(instance.id.as_str());
             let version = instance.java.as_ref()
                 .map(|j| format!("Minecraft {}", j.minecraft))
@@ -852,6 +853,7 @@ impl Launcher {
             // pretend they're ordinary native/Java instances in this picker.
             for instance in self.instances.list.clone().into_iter().filter(|i| {
                 matches!(i.kind, instances::Kind::Default | instances::Kind::Own)
+                    && !horizon_launcher::valtic_smp::is_smp(i)
             }) {
                 let note = match &instance.java {
                     Some(java) => format!("Minecraft {}", java.minecraft),

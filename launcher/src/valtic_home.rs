@@ -197,7 +197,8 @@ impl Launcher {
                 }));
             let playable: Vec<_> = self.instances.list.iter()
                 .filter(|i| matches!(i.kind,
-                    instances::Kind::Default | instances::Kind::Own))
+                    instances::Kind::Default | instances::Kind::Own)
+                    && !horizon_launcher::valtic_smp::is_smp(i))
                 .cloned().collect();
             if playable.is_empty() {
                 menu = menu.child(
