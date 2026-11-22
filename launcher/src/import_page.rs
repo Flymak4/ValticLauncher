@@ -79,6 +79,33 @@ impl Launcher {
         }
     }
 
+    /// The official NeoForge profile can only be installed from its dedicated tab.
+    pub(super) fn install_valtic_smp(&mut self, cx: &mut Context<Self>) {
+        if self.importing.location_busy()
+            || self.instances.list.iter().any(horizon_launcher::valtic_smp::is_smp)
+        {
+            return;
+        }
+        self.importing.busy += 1;
+        self.importing.note = None;
+        let task = cx.background_executor().spawn(async move {
+            horizon_launcher::valtic_smp::install(&|_, _| {})
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.importing.busy -= 1;
+                this.importing.note = Some(result.map(|_| {
+                    this.reload_instances();
+                    this.go(Page::ValticSmp);
+                    "Valtic SMP installed. Launch it from the dedicated server tab."
+                        .to_owned()
+                }));
+                cx.notify();
+            });
+        }).detach();
+    }
+
     fn import_instance(&mut self, file: PathBuf, cx: &mut Context<Self>) {
         self.importing.busy += 1;
         self.importing.note = None;

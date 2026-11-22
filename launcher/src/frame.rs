@@ -286,6 +286,7 @@ impl Launcher {
             (Page::Mods, "Mods", "puzzle"),
             (Page::Versions, "Versions", "download-04"),
             (Page::Servers, "Servers", "computer-terminal-01"),
+            (Page::ValticSmp, "ValticSMP SERVER", "shield"),
         ] {
             let active = self.page == page;
             nav = nav.child(
@@ -495,6 +496,27 @@ impl Launcher {
                     })),
             );
         }
+
+        // Berk-themed tab: independent gold and sea-green styling, not a pink Home instance.
+        let smp_selected = self.page == Page::ValticSmp;
+        nav = nav.child(div()
+            .id("valtic-top-valtic-smp")
+            .flex().items_center().justify_center().gap(px(7.))
+            .h(px(41.)).px(px(if compact { 9. } else { 13. }))
+            .rounded(px(6.))
+            .border_1().border_color(ui::color(0xe5bb78))
+            .bg(ui::color(if smp_selected { 0x5a806b } else { 0x183940 }))
+            .hover(|d| d.bg(ui::color(0x537b69)))
+            .cursor_pointer()
+            .child(gpui::svg().path("valtic/dragon-mark.svg")
+                .w(px(20.)).h(px(20.)))
+            .child(ui::text(12., FontWeight::BOLD, ink::FULL)
+                .text_color(ui::color(0xf4e4bd))
+                .child("ValticSMP SERVER"))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.go(Page::ValticSmp);
+                cx.notify();
+            })));
 
         let logo = div()
             .flex().flex_col().flex_none().justify_center()

@@ -20,6 +20,7 @@ mod glass;
 mod glass_account;
 mod glass_home;
 mod valtic_home;
+mod valtic_smp_page;
 mod valtic_status;
 mod minecraft_news;
 mod glass_home_lists;
@@ -113,6 +114,7 @@ enum Page {
     /// Mods, resource packs and modpacks (imported ones and the browser's).
     Mods,
     Servers,
+    ValticSmp,
     /// What the player wears (`wardrobe_page.rs`), with the cosmetics flag on.
     Wardrobe,
     /// Cosmetics to try on and buy (`wardrobe_page/shop.rs`), beside the Wardrobe and under the
@@ -131,6 +133,7 @@ impl Page {
         let page = match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
             Ok("mods" | "modpacks" | "resourcepacks" | "shaders" | "datapacks") => Page::Mods,
             Ok("servers") => Page::Servers,
+            Ok("valticsmp" | "valtic-smp") => Page::ValticSmp,
             Ok("wardrobe" | "skins") => Page::Wardrobe,
             Ok("shop") if horizon_cosmetics::forced() => Page::Shop,
             Ok("versions") => Page::Versions,
@@ -147,10 +150,11 @@ impl Page {
 
     /// Every page, with its name and icon: the top bar shows all but Settings, which has its
     /// own button.
-    const ALL: [(Page, &'static str, &'static str); 7] = [
+    const ALL: [(Page, &'static str, &'static str); 8] = [
         (Page::Play, "Play", "home"),
         (Page::Mods, "Mods", "package"),
         (Page::Servers, "Servers", "server"),
+        (Page::ValticSmp, "ValticSMP SERVER", "shield"),
         (Page::Wardrobe, "Skins", "user"),
         (Page::Shop, "Shop", "bag"),
         (Page::Versions, "Versions", "archive"),
@@ -1915,6 +1919,13 @@ impl Launcher {
     /// instance owns its game version; never prepare the previously selected version.
     /// Java downloads its own files on launch, while Valtic's native client prepares once.
     fn play_selected_or_prepare(&mut self) {
+        // Do not launch the official SMP instance from any other launcher area.
+        if self.page != Page::ValticSmp
+            && self.selected_instance().is_some_and(horizon_launcher::valtic_smp::is_smp)
+        {
+            self.go(Page::ValticSmp);
+            return;
+        }
         if self.client.is_some() || self.starting_client.is_some() || self.preparing {
             return;
         }
@@ -1977,6 +1988,12 @@ impl Launcher {
     }
 
     fn play(&mut self) {
+        if self.page != Page::ValticSmp
+            && self.selected_instance().is_some_and(horizon_launcher::valtic_smp::is_smp)
+        {
+            self.go(Page::ValticSmp);
+            return;
+        }
         if self.selected_instance().is_none() {
             self.open_instance_dialog(None);
             return;
@@ -3521,6 +3538,22 @@ impl Launcher {
     }
 
     fn play_page(&mut self, cx: &mut Context<Self>) -> Div {
+        if self.selected_instance().is_some_and(horizon_launcher::valtic_smp::is_smp) {
+            let t = self.theme;
+            return div().flex().flex_col().gap(px(22.)).pt(px(30.))
+                .child(page_header("Your dragon awaits",
+                    "Launch the official Valtic SMP modpack from its dedicated tab.", &t))
+                .child(button("visit-valticsmp", "OPEN VALTICSMP SERVER", Kind::Primary, &t)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.go(Page::ValticSmp);
+                        cx.notify();
+                    })))
+                .child(button("create-other-instance", "Create another instance", Kind::Secondary, &t)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.open_instance_dialog(None);
+                        cx.notify();
+                    })));
+        }
         let t = self.theme;
         // A brand-new installation starts with a genuinely empty library.
         // Keep the cherry-blossom Home layout; Play and the instance picker
@@ -5521,6 +5554,7 @@ impl Render for Launcher {
             Page::Versions => self.versions_page(cx),
             Page::Mods => self.mods_page(cx),
             Page::Servers => self.servers_page(cx),
+            Page::ValticSmp => self.valtic_smp_page(cx),
             Page::Wardrobe => self.skins_page(cx),
             Page::Shop => self.shop_page(cx),
             Page::Settings => self.settings_page(cx),
@@ -5562,7 +5596,7 @@ impl Render for Launcher {
         let sky = if t.glass && t.dark {
             div()
                 .absolute().top_0().left_0().size_full()
-                .bg(gpui::rgb(0x1d1421))
+                .bg(gpui::rgb(if self.page == Page::ValticSmp { 0x0c232a } else { 0x1d1421 }))
                 .children(valtic_background.map(|picture| {
                     gpui::img(picture)
                         .absolute().top_0().left_0().size_full()

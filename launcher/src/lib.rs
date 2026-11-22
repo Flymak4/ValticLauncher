@@ -21,6 +21,7 @@ pub mod import;
 pub mod installer;
 pub mod instances;
 pub mod instances_mrpack;
+pub mod valtic_smp;
 pub mod java;
 pub mod java_launch;
 pub mod launch;
