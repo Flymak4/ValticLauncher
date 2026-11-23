@@ -13,7 +13,7 @@ pub(super) struct Importing {
     /// Shared instances being made.
     busy: usize,
     /// What the last drop did, or why not.
-    note: Option<Result<String, String>>,
+    pub(super) note: Option<Result<String, String>>,
 }
 
 impl Importing {
