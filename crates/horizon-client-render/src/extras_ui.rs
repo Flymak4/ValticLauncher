@@ -186,7 +186,7 @@ fn zoom_rows(s: &Settings) -> Vec<Row<ExtraRow>> {
     let on = Value::Switch(s.mods.is_on(i));
     let mut rows = vec![Row::new(ExtraRow::Zoom(i), lang::get(ZOOM), on).about(about)];
     let page = installed[i].native.as_ref();
-    if page.is_some_and(|page| !page.keys.is_empty() || !page.buttons.is_empty()) {
+    if page.is_some_and(|page| !page.mappings.is_empty() || !page.settings.is_empty()) {
         let name = lang::get(MOD_SETTINGS);
         rows.push(Row::new(ExtraRow::ZoomSettings(i), name, Value::Press));
     }
@@ -206,14 +206,13 @@ impl Screen for ExtrasScreen {
     fn note_lines(&self) -> usize {
         NOTE_LINES
     }
-    /// The rows read the extras, the mods, whether cosmetics are offered and the sections' rows.
+    /// The rows read the extras, the mods and the sections' rows.
     fn stamp(&self, s: &Settings) -> u64 {
         let mut added = Vec::new();
         for (_, section) in sections() {
             section.rows(&mut added);
         }
-        let cosmetics = horizon_cosmetics::enabled();
-        shell::stamp_of(&(&s.extras, &s.mods, cosmetics, added))
+        shell::stamp_of(&(&s.extras, &s.mods, added))
     }
     fn sheets(&self, s: &Settings) -> Vec<Sheet<(), ExtraRow>> {
         let mut groups = vec![Group {
@@ -234,6 +233,9 @@ impl Screen for ExtrasScreen {
             }
         }
         add_sections(&mut groups);
+        // A heading whose rows all come from sections (Third person's own name tag) shows only
+        // when a section fills it: the plain executable registers none.
+        groups.retain(|g| !g.rows.is_empty());
         vec![Sheet::new((), lang::get(TITLE), lang::get(ABOUT), groups)]
     }
     fn press(&mut self, s: &mut Settings, row: ExtraRow, back: bool) -> Vec<Output> {
@@ -321,22 +323,6 @@ mod tests {
         assert_ne!(s.extras.mouse_tweaks_wheel, before);
     }
 
-    #[test]
-    fn the_three_way_cosmetics_row_turns_both_ways() {
-        use horizon_cosmetics::prefs::Others;
-        let mut s = Settings::default();
-        let mut screen = ExtrasScreen;
-        let row = ExtraRow::Item(Item::CosmeticsOthers);
-        // Not chosen, nothing owned: it shows Hidden, and forward wraps to Shown.
-        assert_eq!(s.extras.effective_others(), Others::Hidden);
-        screen.press(&mut s, row, false);
-        assert_eq!(s.extras.cosmetics_others, Some(Others::Shown));
-        screen.press(&mut s, row, true);
-        assert_eq!(s.extras.cosmetics_others, Some(Others::Hidden));
-        screen.press(&mut s, row, true);
-        assert_eq!(s.extras.cosmetics_others, Some(Others::NameTags));
-    }
-
     /// The sort key binds instead of cycling; the wheel leaves it be.
     #[test]
     fn the_key_row_waits_for_a_key() {
@@ -406,16 +392,27 @@ mod tests {
     fn down_from_the_search_field_lands_on_the_first_row() {
         use crate::{hud::HudBatch, settings_shell::Columns, ui};
         use winit::keyboard::KeyCode as K;
-        let atlas = crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent")).unwrap();
+        let atlas = crate::hud::HudAtlas::build(
+            &crate::resource_source::ResourceSource::directory("/nonexistent".into()),
+        )
+        .unwrap();
         let mut s = Settings::default();
         let mut shell = Shell::<ExtrasScreen>::default();
-        let mut batch = HudBatch::new([1708, 960]);
-        shell.draw(&s, &mut batch, &atlas, (0.0, 0.0), false, None);
+        let mut batch = HudBatch::scratch([1708, 960]);
+        shell.draw_test_frame(
+            &s,
+            &mut batch,
+            &atlas,
+            (0.0, 0.0),
+            false,
+            None,
+            &mut |_, _| {},
+        );
         crate::widgets::end_frame(1);
         let size = (batch.width, batch.height);
         let cols = Columns::of(size.0, size.1).with_note_lines(NOTE_LINES);
-        // The Mods group's note can't take the focus: the first item can.
-        let first = ExtraRow::Item(Item::OwnNameTag);
+        // The first item can take the focus.
+        let first = ExtraRow::Item(Item::SpyglassPolarLook);
         let at = shell.point_at(&s, size, first);
         let [x, y, w, h] = crate::widgets::linked_step(cols.search(), true).unwrap();
         assert!(ui::hovered(at, x, y, w, h));

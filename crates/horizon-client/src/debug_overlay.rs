@@ -5,9 +5,10 @@ use crate::{
     font::Font,
     hud::HudVertex,
     hud_layout::{GuiDraw, PoseOp, fill},
-    java_text,
     text::Text,
 };
+use horizon_client_render::gfx::pack_timing::{Counters, DetailSupport, PartsMode, PassCounters};
+use horizon_core::java_number;
 use std::time::{Duration, Instant};
 
 /// `extractLines`'s background: ARGB 0x90505050.
@@ -132,18 +133,96 @@ pub fn labelled_pass_lines(label: &str, passes: &[(String, f32)]) -> Vec<String>
         return Vec::new();
     }
     let total: f32 = passes.iter().map(|p| p.1).sum();
-    let mut lines = vec![format!("{label}: {total:.2} ms in {} passes", passes.len())];
+    let mut lines = vec![format!(
+        "{label}: {} ms in {} passes",
+        java_number::format_fixed(f64::from(total), 2),
+        passes.len()
+    )];
     let mut costliest: Vec<&(String, f32)> = passes.iter().collect();
     costliest.sort_by(|a, b| b.1.total_cmp(&a.1));
-    lines.extend(
-        costliest
-            .iter()
-            .take(SHOWN)
-            .map(|(name, ms)| format!("{name}: {ms:.2} ms")),
-    );
+    lines.extend(costliest.iter().take(SHOWN).map(|(name, ms)| {
+        format!(
+            "{name}: {} ms",
+            java_number::format_fixed(f64::from(*ms), 2)
+        )
+    }));
     if costliest.len() > SHOWN {
         let rest: f32 = costliest[SHOWN..].iter().map(|p| p.1).sum();
-        lines.push(format!("{} more: {rest:.2} ms", costliest.len() - SHOWN));
+        lines.push(format!(
+            "{} more: {} ms",
+            costliest.len() - SHOWN,
+            java_number::format_fixed(f64::from(rest), 2)
+        ));
+    }
+    lines
+}
+
+/// `n` in three digits and an SI suffix: `512`, `83.0k`, `6.30M`, `1.20G`.
+pub fn compact_count(n: u64) -> String {
+    let (mut value, mut unit) = (n as f64, 0);
+    while value >= 999.5 && unit < 4 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    let suffix = ["", "k", "M", "G", "T"][unit];
+    match value {
+        _ if unit == 0 => n.to_string(),
+        v if v < 9.995 => format!("{}{suffix}", java_number::format_fixed(v, 2)),
+        v if v < 99.95 => format!("{}{suffix}", java_number::format_fixed(v, 1)),
+        v => format!("{}{suffix}", java_number::format_fixed(v, 0)),
+    }
+}
+
+/// F3's detail lines: each pass's parts, then the six passes with the most fragments and their segments.
+pub fn pass_detail_lines(
+    parts: &[(String, Vec<(String, f32)>)],
+    counters: &[(String, PassCounters)],
+    support: DetailSupport,
+) -> Vec<String> {
+    const SHOWN: usize = 6;
+    let tr = |key: &str, args: &[&dyn std::fmt::Display]| Text::tr(key, args).plain();
+    let mode = match support.parts {
+        PartsMode::InsidePasses => "horizon.debug.pass_detail.inside_passes",
+        PartsMode::SeparatePasses => "horizon.debug.pass_detail.separate_passes",
+    };
+    let mut lines = vec![tr("horizon.debug.pass_detail.title", &[&tr(mode, &[])])];
+    for (pass, parts) in parts {
+        for (part, ms) in parts {
+            let ms = java_number::format_fixed(f64::from(*ms), 2);
+            lines.push(tr("horizon.debug.pass_detail.part", &[pass, part, &ms]));
+        }
+    }
+    if !support.counters {
+        lines.push(tr("horizon.debug.pass_detail.no_counters", &[]));
+        return lines;
+    }
+    let per_pixel = |fragments: u64, pixels: u64| match support.fragment_unit {
+        Some(unit) if pixels > 0 => {
+            java_number::format_fixed(unit.pixels_of(fragments) as f64 / pixels as f64, 2)
+        }
+        _ => "?".to_owned(),
+    };
+    let line = |name: &str, c: &Counters, pixels: u64| {
+        let (fragments, vertices) = (c.fragment_shader_invocations, c.vertex_shader_invocations);
+        tr(
+            "horizon.debug.pass_detail.counters",
+            &[
+                &name,
+                &compact_count(fragments),
+                &per_pixel(fragments, pixels),
+                &compact_count(vertices),
+                &compact_count(c.clipper_primitives_out),
+                &compact_count(c.clipper_invocations),
+            ],
+        )
+    };
+    let mut busiest: Vec<&(String, PassCounters)> = counters.iter().collect();
+    busiest.sort_by_key(|c| std::cmp::Reverse(c.1.total.fragment_shader_invocations));
+    for (pass, c) in busiest.into_iter().take(SHOWN) {
+        lines.push(line(pass, &c.total, c.pixels));
+        for (part, counted) in &c.parts {
+            lines.push(format!("  {}", line(part, counted, c.pixels)));
+        }
     }
     lines
 }
@@ -181,9 +260,9 @@ pub fn position(
     vec![
         format!(
             "XYZ: {} / {} / {}",
-            java_text::format_fixed(pos[0], 3),
-            java_text::format_fixed(pos[1], 5),
-            java_text::format_fixed(pos[2], 3),
+            java_number::format_fixed(pos[0], 3),
+            java_number::format_fixed(pos[1], 5),
+            java_number::format_fixed(pos[2], 3),
         ),
         format!("Block: {} {} {}", block[0], block[1], block[2]),
         format!(
@@ -195,8 +274,8 @@ pub fn position(
         ),
         format!(
             "Facing: {direction} ({towards}) ({} / {})",
-            java_text::format_fixed(wrap_degrees(yaw) as f64, 1),
-            java_text::format_fixed(wrap_degrees(pitch) as f64, 1),
+            java_number::format_fixed(wrap_degrees(yaw) as f64, 1),
+            java_number::format_fixed(wrap_degrees(pitch) as f64, 1),
         ),
         format!("{dimension} FC: {forced}"),
         format!(
@@ -213,7 +292,7 @@ pub fn refresh_rate_label(hz: f64) -> String {
     if hz == hz.round() {
         format!("{}", hz as i64)
     } else {
-        format!("{hz:.2}")
+        java_number::format_fixed(hz, 2)
     }
 }
 
@@ -413,8 +492,8 @@ pub fn local_difficulty_line(effective: f32) -> String {
     };
     format!(
         "Local Difficulty: {} // {}",
-        java_text::format_fixed(effective as f64, 2),
-        java_text::format_fixed(special as f64, 2),
+        java_number::format_fixed(effective as f64, 2),
+        java_number::format_fixed(special as f64, 2),
     )
 }
 
@@ -547,6 +626,7 @@ pub fn memory_lines(m: ProcessMemory, rate: i64) -> [String; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_client_render::gfx::pack_timing;
 
     fn lines(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()
@@ -582,6 +662,88 @@ mod tests {
         // A smaller repaint leaves nothing of the last one behind.
         cache.store(start, layout, &[]);
         assert_eq!(cache.fresh(start, layout).map(<[_]>::len), Some(0));
+    }
+
+    #[test]
+    fn counts_read_in_three_digits_with_an_si_suffix() {
+        for (n, want) in [
+            (0, "0"),
+            (999, "999"),
+            (1000, "1.00k"),
+            (83_049, "83.0k"),
+            (999_999, "1.00M"),
+            (6_300_000, "6.30M"),
+            (1_200_000_000, "1.20G"),
+        ] {
+            assert_eq!(compact_count(n), want, "{n}");
+        }
+    }
+
+    fn counted(fragments: u64, parts: &[(&str, u64)]) -> PassCounters {
+        let c = |fragment_shader_invocations| Counters {
+            vertex_shader_invocations: 1000,
+            clipper_invocations: 400,
+            clipper_primitives_out: 300,
+            fragment_shader_invocations,
+        };
+        PassCounters {
+            total: c(fragments),
+            pixels: 1000,
+            parts: parts.iter().map(|p| (p.0.to_owned(), c(p.1))).collect(),
+        }
+    }
+
+    #[test]
+    fn pass_detail_lines_list_parts_then_the_six_busiest_passes_with_segments() {
+        let support = DetailSupport {
+            parts: PartsMode::InsidePasses,
+            encoder_stamps: true,
+            counters: true,
+            fragment_unit: Some(pack_timing::FragmentUnit::Quad),
+        };
+        let parts = vec![("GPU culling".to_owned(), vec![("cull".to_owned(), 0.3141)])];
+        let mut counters: Vec<(String, PassCounters)> = (1..=7)
+            .map(|i| (format!("P{i}"), counted(i * 100, &[])))
+            .collect();
+        counters[2].1 = counted(1_000_000, &[("a", 600_000), ("b", 400_000)]);
+        let (lines, _) = crate::lang::scoped(crate::lang::Language::load(&[], "en_us"), || {
+            pass_detail_lines(&parts, &counters, support)
+        });
+        assert_eq!(
+            lines,
+            [
+                "Horizon pass detail (timestamps inside passes)",
+                "GPU culling › cull: 0.31 ms",
+                "P3: 1.00M fragments, 4000.00 per pixel, 1.00k vertices, 300 of 400 triangles kept",
+                "  a: 600k fragments, 2400.00 per pixel, 1.00k vertices, 300 of 400 triangles kept",
+                "  b: 400k fragments, 1600.00 per pixel, 1.00k vertices, 300 of 400 triangles kept",
+                "P7: 700 fragments, 2.80 per pixel, 1.00k vertices, 300 of 400 triangles kept",
+                "P6: 600 fragments, 2.40 per pixel, 1.00k vertices, 300 of 400 triangles kept",
+                "P5: 500 fragments, 2.00 per pixel, 1.00k vertices, 300 of 400 triangles kept",
+                "P4: 400 fragments, 1.60 per pixel, 1.00k vertices, 300 of 400 triangles kept",
+                "P2: 200 fragments, 0.80 per pixel, 1.00k vertices, 300 of 400 triangles kept",
+            ]
+        );
+    }
+
+    #[test]
+    fn pass_detail_lines_say_so_when_the_device_has_no_counters() {
+        let support = DetailSupport {
+            parts: PartsMode::SeparatePasses,
+            encoder_stamps: false,
+            counters: false,
+            fragment_unit: None,
+        };
+        let (lines, _) = crate::lang::scoped(crate::lang::Language::load(&[], "en_us"), || {
+            pass_detail_lines(&[], &[], support)
+        });
+        assert_eq!(
+            lines,
+            [
+                "Horizon pass detail (separate passes, adds GPU time)",
+                "GPU counters: Vulkan only"
+            ]
+        );
     }
 
     #[test]
@@ -822,5 +984,13 @@ mod tests {
         assert_eq!(lines[1], "p9: 9.00 ms");
         assert_eq!(lines[8], "p2: 2.00 ms");
         assert_eq!(lines[9], "2 more: 1.00 ms");
+    }
+
+    #[test]
+    fn overlay_and_refresh_labels_round_decimal_midpoints_half_up() {
+        assert_eq!(refresh_rate_label(1.005), "1.01");
+        assert_eq!(compact_count(1_005), "1.01k");
+        assert_eq!(compact_count(10_250), "10.3k");
+        assert_eq!(compact_count(102_500), "103k");
     }
 }

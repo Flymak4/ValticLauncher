@@ -17,9 +17,12 @@
 //! pages, [`hud`] for what it draws on the HUD, [`lang`] for the lang files with its text.
 #![forbid(unsafe_code)]
 
+pub mod actions;
 pub mod hud;
 pub mod lang;
+pub mod mod_links;
 pub mod pages;
+pub mod perf;
 pub mod players;
 mod registry;
 pub mod settings;
@@ -89,6 +92,11 @@ pub trait Hooks: Sync {
         None
     }
 
+    /// Opens and shares saved performance captures ([`perf`]); the first hook that offers one is used.
+    fn captures(&self) -> Option<&dyn perf::Captures> {
+        None
+    }
+
     /// A game window opened: once, before the first frame, for every run that has a window,
     /// automated ones included ([`Client::automated`]); never for a dedicated server.
     fn client_started(&self, _client: &Client) {}
@@ -96,6 +104,35 @@ pub trait Hooks: Sync {
     /// What the player is doing, for a status shown outside the game (Discord's): called when it
     /// changes, not every frame. Splitscreen: the first player's only.
     fn activity(&self, _now: Activity) {}
+
+    /// Where a game started without its prepared files (run by hand, not from a launcher) sends
+    /// the player for them: the screen's text and its button. The first hook that answers is
+    /// used; with none, the screen says how to prepare the files and opens no page. Asked once,
+    /// before that screen's window opens.
+    fn get_the_game(&self) -> Option<GetTheGame> {
+        None
+    }
+
+    /// Whether the player whose turn it is sees their own name over their head in third person,
+    /// as other players see it (Horizon's own name tag). Asked each frame name tags are drawn;
+    /// the engine shows it when any hook says so, and still never in first person, asleep, as a
+    /// spectator or while invisible.
+    fn own_name_tag(&self) -> bool {
+        false
+    }
+}
+
+/// What [`Hooks::get_the_game`] answers. The texts are translation keys of the game's own strings
+/// (`assets/horizon/lang`); a `%s` in a paragraph is [`address`](Self::address) without its
+/// scheme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GetTheGame {
+    /// The page the button opens.
+    pub address: &'static str,
+    pub title: &'static str,
+    pub paragraphs: &'static [&'static str],
+    /// The button's label.
+    pub button: &'static str,
 }
 
 /// What [`Hooks::client_started`] gets.
@@ -143,6 +180,8 @@ pub enum Dimension {
     Overworld,
     Nether,
     End,
+    /// A custom dimension, with no private identifier published.
+    Other,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,6 +259,7 @@ pub mod engine {
     /// registration ends.
     pub fn seal() {
         all();
+        crate::actions::all();
         crate::settings::all();
         crate::pages::engine::all();
         crate::hud::engine::all();
@@ -331,9 +371,24 @@ pub mod engine {
         }
     }
 
+    /// [`Hooks::captures`]: the first registered hook's.
+    pub fn captures() -> Option<&'static dyn perf::Captures> {
+        all().iter().find_map(|hooks| hooks.captures())
+    }
+
     /// [`Hooks::tunnel`]: the first registered hook's resolver.
     pub fn tunnel() -> Option<&'static dyn tunnel::Resolver> {
         all().iter().find_map(|hooks| hooks.tunnel())
+    }
+
+    /// [`Hooks::get_the_game`]: the first registered hook's answer.
+    pub fn get_the_game() -> Option<GetTheGame> {
+        all().iter().find_map(|hooks| hooks.get_the_game())
+    }
+
+    /// [`Hooks::own_name_tag`]: whether any hook says so.
+    pub fn own_name_tag() -> bool {
+        all().iter().any(|hooks| hooks.own_name_tag())
     }
 }
 
@@ -357,8 +412,19 @@ mod tests {
         fn published(&self, open: bool) {
             self.0.lock().unwrap().push(format!("published {open}"));
         }
+        fn shutdown(&self) {
+            self.0.lock().unwrap().push("shutdown".into());
+        }
         fn activity(&self, now: Activity) {
             self.0.lock().unwrap().push(format!("{now:?}"));
+        }
+        fn get_the_game(&self) -> Option<GetTheGame> {
+            Some(GetTheGame {
+                address: "https://example.org",
+                title: "recorder.title",
+                paragraphs: &[],
+                button: "recorder.button",
+            })
         }
         fn frame(&self, frame: &players::Frame, sprites: &mut dyn players::SpriteStore) {
             self.0
@@ -550,6 +616,10 @@ mod tests {
         }
         engine::shutdown();
         assert!(engine::any());
+        assert_eq!(
+            engine::get_the_game().map(|g| g.address),
+            Some("https://example.org")
+        );
         let mut atlas = Atlas::default();
         let model = |kind| players::PlayerModel::new(5, kind, Some(9), 0, false);
         // Before the frame put the sprite in: the decoration without its badge.
@@ -591,6 +661,7 @@ mod tests {
                 "published false",
                 "Menus",
                 "World { play: Singleplayer, dimension: Nether, mode: Creative }",
+                "shutdown",
                 "frame 4"
             ]
         );

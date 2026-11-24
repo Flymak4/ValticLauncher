@@ -11,6 +11,7 @@ use super::{
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_world::native_load_context::LoopContext;
 
 pub fn register(m: &mut Mob) {
     let g = &mut m.ai.goals;
@@ -174,7 +175,7 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         return;
     };
     let motion = match who {
-        Who::Player => cx.w.player.as_ref().map_or(Vec3::ZERO, |p| p.velocity),
+        Who::Player => cx.w.selected_player().map_or(Vec3::ZERO, |p| p.velocity),
         Who::Mob(id) => cx.w.seen(id).map_or(Vec3::ZERO, |s| s.velocity),
     };
     let xd = t.position.x + motion.x - m.position.x;
@@ -201,13 +202,13 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     };
     // `target.hasEffect`: a target that already has the effect gets the next one.
     let has = |effect: &str| match who {
-        Who::Player => cx.w.player.as_ref().is_some_and(|p| p.has_effect(effect)),
+        Who::Player => cx.w.selected_player().is_some_and(|p| p.has_effect(effect)),
         Who::Mob(id) => cx.w.seen(id).is_some_and(|s| s.has_effect(effect)),
     };
     // The potion it throws: `PotionContents.createItemStack(Items.SPLASH_POTION,
     // potion)` for the one `Witch.performRangedAttack` picks.
     let potion = if heals {
-        m.ai.target = None;
+        m.set_ai_target(cx.w, None);
         if health <= 4.0 {
             "minecraft:healing"
         } else {
@@ -231,8 +232,7 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         Some(Who::Mob(m.id)),
     );
     // Splash potions throw with gravity 0.05.
-    p.shoot(
-        &mut crate::random_source::entity(),
+    p.shoot_own(
         [xd, yd + dist * 0.2, zd],
         if dist <= 2.0 { 0.45 } else { 0.75 },
         8.0,
@@ -253,13 +253,18 @@ pub fn speed(m: &Mob, base: f64) -> f64 {
 }
 /// Witch.aiStep before `super.aiStep()`: the healing cooldown, then drink
 /// water breathing, fire resistance, healing or swiftness.
-pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
+pub fn ai_step(
+    m: &mut Mob,
+    context: &LoopContext,
+    cx_events: &mut Vec<MobEvent>,
+    target_far: bool,
+) {
     if !m.alive() {
         return;
     }
     // healRaidersGoal.decrementCooldown (the attack goal's canAttack reads it).
     m.extra.counter2 -= 1;
-    drink(m, cx_events, target_far);
+    drink(m, context, cx_events, target_far);
     // `broadcastEntityEvent(this, 15)`: the magic puffs over its hat on every client.
     if m.random.next_float() < 7.5E-4 {
         cx_events.push(MobEvent::EntityEvent {
@@ -269,22 +274,26 @@ pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
         });
     }
 }
-fn drink(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
+fn drink(m: &mut Mob, context: &LoopContext, cx_events: &mut Vec<MobEvent>, target_far: bool) {
     if m.extra.flag {
         // `usingTime-- <= 0`
         m.extra.using_item -= 1;
         if m.extra.using_item < 0 {
             m.extra.using_item = 0;
-            if let Some(potion) = m.extra.take_main_hand() {
-                match potion.as_ref() {
-                    "minecraft:water_breathing" => {
+            // `setItemSlot(MAINHAND, EMPTY)`, then the effects of the stack
+            // when it `is(Items.POTION)` with `POTION_CONTENTS`.
+            let held = m.extra.main_hand_stack().cloned();
+            m.extra.set_main_hand_stack(None);
+            if let Some(held) = held.filter(|s| &*s.item == "minecraft:potion") {
+                match held.potion() {
+                    Some("minecraft:water_breathing") => {
                         m.add_effect("minecraft:water_breathing", 3600, 0)
                     }
-                    "minecraft:fire_resistance" => {
+                    Some("minecraft:fire_resistance") => {
                         m.add_effect("minecraft:fire_resistance", 3600, 0)
                     }
-                    "minecraft:healing" => m.heal(4.0),
-                    "minecraft:swiftness" => m.add_effect("minecraft:speed", 3600, 0),
+                    Some("minecraft:healing") => m.heal(context, 4.0),
+                    Some("minecraft:swiftness") => m.add_effect("minecraft:speed", 3600, 0),
                     _ => {}
                 }
             }
@@ -314,7 +323,12 @@ fn drink(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
         None
     };
     if let Some(p) = potion {
-        m.extra.set_main_hand(Some(p.into()));
+        // `PotionContents.createItemStack(Items.POTION, potion)`: a potion item
+        // carrying the potion, the stack `dropCustomDeathLoot` drops if the
+        // witch dies mid-drink. The potion's id is not an item (#19215).
+        m.extra.set_main_hand_stack(Some(
+            crate::items::ItemStack::new("minecraft:potion", 1).with_potion(p),
+        ));
         // PotionItem use duration 32 ticks.
         m.extra.using_item = 32;
         m.extra.flag = true;
@@ -333,8 +347,8 @@ fn witch_sound(m: &mut Mob, events: &mut Vec<MobEvent>, name: &'static str) {
     events.push(MobEvent::Sound(name, m.center(), 1.0, pitch));
 }
 /// `WitchRenderer.extractRenderState`'s `isHoldingPotion`: the main hand holds
-/// a potion, either a drunk one (kept by the potion's name, `drink`) or a
-/// plain potion item.
+/// a potion item (`drink` puts one there), or the potion's name an older
+/// Horizon kept there while a witch drank.
 pub fn holds_potion(item: &str) -> bool {
     matches!(
         item,
@@ -358,7 +372,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     let deg = horizon_core::geometry::trig::DEG_TO_RAD;
     p.xrot("nose", (s.age * speed).msin() * 4.5 * deg);
     p.zrot("nose", (s.age * speed).mcos() * 2.5 * deg);
-    if m.extra.main_hand.is_some() {
+    if m.extra.main_hand_id().is_some() {
         let n = p.get("nose");
         n[0] = 0.0;
         n[1] = 1.0;
@@ -405,10 +419,9 @@ mod tests {
     /// How many drink sounds forty attempts produce. Vanilla plays
     /// `entity.witch.drink` at volume 1, and skips it when the witch is silent.
     fn drink_sounds(silent: bool) -> usize {
-        use horizon_core::random::LegacyRandom;
         let mut m = witch();
         m.silent = silent;
-        m.random = LegacyRandom::new(1);
+        m.random.set_seed(1);
         m.fluids.eye_in_water = true;
         m.fire_ticks = 20;
         m.health = 1.0;
@@ -416,7 +429,12 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..40 {
             m.extra.flag = false;
-            drink(&mut m, &mut events, true);
+            drink(
+                &mut m,
+                crate::test_resources::server_loop_context(),
+                &mut events,
+                true,
+            );
         }
         events
             .iter()
@@ -435,10 +453,10 @@ mod tests {
         assert_eq!(drink_sounds(true), 0);
 
         let mut loud = witch();
-        loud.random = LegacyRandom::new(11);
+        loud.random.set_seed(11);
         let mut quiet = witch();
         quiet.silent = true;
-        quiet.random = LegacyRandom::new(11);
+        quiet.random.set_seed(11);
         let mut oracle = LegacyRandom::new(11);
         // Vanilla: 0.8F + nextFloat() * 0.4F, volume 1.
         let pitch = 0.8 + oracle.next_float() * 0.4;
@@ -457,6 +475,81 @@ mod tests {
         assert!(events.is_empty());
         let mut untouched = LegacyRandom::new(11);
         assert_eq!(quiet.random.next_float(), untouched.next_float());
+    }
+
+    /// `Witch.aiStep` puts `PotionContents.createItemStack(Items.POTION, potion)`
+    /// in the main hand: a witch killed mid-drink drops a `minecraft:potion`
+    /// carrying the potion (`Mob.dropCustomDeathLoot`), never the potion's id
+    /// as an item (#19215), and one that finishes drinking gets its effect.
+    #[test]
+    fn a_witch_killed_mid_drink_drops_a_potion_item() {
+        use crate::mobs::drops::{self, Death, Drop};
+        use crate::random_sequences::RandomSequences;
+        use horizon_world::loot::{LootData, PackOverlay};
+        let context = crate::test_resources::server_loop_context();
+        let mut m = witch();
+        m.random.set_seed(3);
+        m.health = m.attrs.max_health;
+        // Only water breathing can be drunk: under water, unhurt, no target.
+        m.fluids.eye_in_water = true;
+        let mut events = Vec::new();
+        for _ in 0..500 {
+            if m.extra.flag {
+                break;
+            }
+            drink(&mut m, context, &mut events, false);
+        }
+        assert!(m.extra.flag, "the witch never started drinking");
+
+        let mut drinker = m.clone();
+        for _ in 0..40 {
+            if !drinker.extra.flag {
+                break;
+            }
+            drink(&mut drinker, context, &mut events, false);
+        }
+        assert!(!drinker.extra.flag);
+        assert!(drinker.extra.main_hand_stack().is_none());
+        assert!(drinker.has_effect("minecraft:water_breathing"));
+
+        let root = std::env::temp_dir().join(format!("horizon-witch-drink-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("data/minecraft/loot_table")).unwrap();
+        std::fs::write(root.join("items.json"), "{}").unwrap();
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let loot = LootData::load(&root, &PackOverlay::default(), &defaults).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let death = Death {
+            loot: &loot,
+            damage: None,
+            player: None,
+            player_killed: true,
+            luck: 0.0,
+            vehicle: None,
+            mob_drops: true,
+            world_seed: 0,
+        };
+        m.extra.drop_chances = Some(Box::new([1.0; 8]));
+        let (out, _) = drops::die(
+            &mut m,
+            &death,
+            &mut RandomSequences::default(),
+            &mut crate::mobs::world::level_random(7),
+        );
+        let items: Vec<_> = out
+            .iter()
+            .filter_map(|d| match d {
+                Drop::Item(s) => Some((s.item.clone(), None)),
+                Drop::Stack(s) => Some((s.item.to_string(), s.potion().map(str::to_owned))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            items,
+            [(
+                "minecraft:potion".to_owned(),
+                Some("minecraft:water_breathing".to_owned())
+            )]
+        );
     }
 
     /// The hoisted list is exactly the set `is_raider` answers yes for.

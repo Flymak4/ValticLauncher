@@ -91,6 +91,7 @@ impl std::error::Error for SampleError {}
 #[derive(Debug, Default)]
 pub struct SamplerContext {
     scratch: Vec<Vec<f32>>,
+    cache_buffers: Vec<Vec<f32>>,
     caches: Option<Vec<cache::CacheCell>>,
     fields: WorldFields,
     sparse: bool,
@@ -126,10 +127,15 @@ impl SamplerContext {
     /// Cached scalar/volume results and world bindings must not cross chunks or
     /// graphs, whose cache IDs can refer to different functions.
     pub fn reset(&mut self) {
-        self.caches = self.caches.as_ref().map(|_| Vec::new());
+        self.clear_caches();
         self.fields = WorldFields::default();
         if let Some(planes) = &mut self.planes {
-            planes.clear();
+            for (_, mut buf) in planes.drain() {
+                if buf.capacity() > 0 {
+                    buf.clear();
+                    self.cache_buffers.push(buf);
+                }
+            }
         }
         self.capture = None;
         self.lattice = Vec::new();
@@ -153,6 +159,7 @@ impl SamplerContext {
     /// Release retained storage between worlds or after unusually large work.
     pub fn clear_scratch(&mut self) {
         self.scratch.clear();
+        self.cache_buffers.clear();
     }
 }
 
@@ -213,6 +220,49 @@ pub fn is_pointwise(root: &Arc<dyn DensitySampler>) -> bool {
         }
     }
     true
+}
+/// `sample_needed` with a mask of needed Ys, `sample_volume` without one.
+fn sample_with(
+    sampler: &dyn DensitySampler,
+    context: &mut SamplerContext,
+    buffer: &mut [f32],
+    volume: DensityVolume,
+    needed: Option<&[u64]>,
+) -> Result<(), SampleError> {
+    match needed {
+        Some(needed) => sampler.sample_needed(context, buffer, volume, needed),
+        None => sampler.sample_volume(context, buffer, volume),
+    }
+}
+/// A [`DensitySampler::sample_needed`] mask that has a bit for every Y of every column of
+/// `volume`; any other mask means every value is needed.
+fn usable_mask(needed: &[u64], volume: DensityVolume) -> Option<&[u64]> {
+    let [size_x, size_y, size_z] = volume.sizes();
+    (size_y <= 64 && needed.len() >= size_x * size_z).then_some(needed)
+}
+/// The Ys of each column (one bit per Y, if at most 64) a caller that needs `needed` (all of
+/// them without a mask) reads from a sampler it consults only where `reads(values[index])`.
+fn needed_where(
+    values: &[f32],
+    volume: DensityVolume,
+    needed: Option<&[u64]>,
+    reads: impl Fn(f32) -> bool,
+) -> Option<Vec<u64>> {
+    let size_y = volume.sizes()[1];
+    if size_y > 64 {
+        return None;
+    }
+    let columns = values[..volume.size()].chunks_exact(size_y);
+    Some(
+        columns
+            .enumerate()
+            .map(|(column, values)| {
+                let read = (values.iter().enumerate())
+                    .fold(0, |bits, (y, &value)| bits | u64::from(reads(value)) << y);
+                read & needed.map_or(u64::MAX, |needed| needed[column])
+            })
+            .collect(),
+    )
 }
 fn check_buffer(buffer: &[f32], volume: DensityVolume) -> Result<(), SampleError> {
     if buffer.len() < volume.size() {

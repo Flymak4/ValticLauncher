@@ -37,16 +37,6 @@ impl Request {
             .find(|(k, _)| *k == key)
             .map(|(_, v)| v)
     }
-    /// One cookie the browser sent.
-    pub fn cookie(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .filter(|(k, _)| k.eq_ignore_ascii_case("cookie"))
-            .flat_map(|(_, v)| v.split(';'))
-            .filter_map(|c| c.trim().split_once('='))
-            .find(|(k, _)| *k == name)
-            .map(|(_, v)| v)
-    }
 }
 
 pub struct Response {
@@ -128,8 +118,57 @@ fn read_line_bounded(reader: &mut impl BufRead, line: &mut String) -> std::io::R
     Ok(n)
 }
 
-/// Reads one request from a connection, plain or TLS (the management protocol's `websocket::Link`).
+/// How long a client has for its whole request (line, headers and body): the per-read timeout alone
+/// let one byte every few seconds hold a connection, and its thread, without end.
+pub const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Connections a listener serves at once ([`serve`], the management server); past it a new one is
+/// closed unanswered.
+pub const MAX_OPEN: usize = 64;
+
+/// One of a listener's [`MAX_OPEN`] connections, given back when dropped.
+pub struct Slot(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+impl Slot {
+    /// A slot of `open`'s, or None when `max` are taken.
+    pub fn take(open: &std::sync::Arc<std::sync::atomic::AtomicUsize>, max: usize) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        let mut n = open.load(Ordering::Acquire);
+        while n < max {
+            match open.compare_exchange_weak(n, n + 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(Self(open.clone())),
+                Err(now) => n = now,
+            }
+        }
+        None
+    }
+}
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// Fails every read once `until` has passed: one deadline for a whole request.
+struct Deadline<R> {
+    inner: R,
+    until: std::time::Instant,
+}
+impl<R: Read> Read for Deadline<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if std::time::Instant::now() >= self.until {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.inner.read(buf)
+    }
+}
+
+/// Reads one request from a connection, plain or TLS (the management protocol's `websocket::Link`),
+/// within [`REQUEST_DEADLINE`].
 pub fn read_request(stream: impl Read) -> Result<Request, Response> {
+    read_request_within(stream, REQUEST_DEADLINE)
+}
+
+fn read_request_within(stream: impl Read, deadline: Duration) -> Result<Request, Response> {
     fn bad(m: &str) -> Response {
         Response::error(400, m)
     }
@@ -146,7 +185,10 @@ pub fn read_request(stream: impl Read) -> Result<Request, Response> {
             }
         })
     }
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(Deadline {
+        inner: stream,
+        until: std::time::Instant::now() + deadline,
+    });
     let mut line = String::new();
     read_line(&mut reader, &mut line, "no request")?;
     let mut parts = line.split_whitespace();
@@ -175,10 +217,12 @@ pub fn read_request(stream: impl Read) -> Result<Request, Response> {
     if length > MAX_BODY {
         return Err(Response::error(413, "the body is too large"));
     }
-    let mut body = vec![0; length];
-    reader
-        .read_exact(&mut body)
-        .map_err(|_| bad("the body is shorter than its Content-Length"))?;
+    // Grown as the bytes come, not allocated whole for a Content-Length nobody sends.
+    let mut body = Vec::new();
+    match reader.take(length as u64).read_to_end(&mut body) {
+        Ok(n) if n == length => {}
+        _ => return Err(bad("the body is shorter than its Content-Length")),
+    }
     Ok(Request {
         method: method.to_owned(),
         path: path.to_owned(),
@@ -221,21 +265,41 @@ pub fn write_head(mut out: impl Write, response: &Response) -> std::io::Result<(
     out.flush()
 }
 
+/// How long one write to a client may block ([`serve`]). It limits each write, not a whole
+/// download: a slow reader that takes its bytes keeps going, one that stops reading is dropped.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Serves `handle` on `listener` until the process ends, a thread per connection.
 pub fn serve(
     listener: TcpListener,
+    handle: impl Fn(&Request) -> Response + Send + Sync + 'static,
+) -> std::io::Result<()> {
+    serve_with_write_timeout(listener, WRITE_TIMEOUT, handle)
+}
+
+/// [`serve`] with its own per-write timeout.
+fn serve_with_write_timeout(
+    listener: TcpListener,
+    write_timeout: Duration,
     handle: impl Fn(&Request) -> Response + Send + Sync + 'static,
 ) -> std::io::Result<()> {
     let handle = std::sync::Arc::new(handle);
     std::thread::Builder::new()
         .name("api".into())
         .spawn(move || {
+            let open = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             for stream in listener.incoming().flatten() {
+                let Some(slot) = Slot::take(&open, MAX_OPEN) else {
+                    continue;
+                };
                 let handle = handle.clone();
                 let _ = std::thread::Builder::new()
                     .name("api-client".into())
                     .spawn(move || {
+                        let _slot = slot;
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                        // Without it a client that never reads holds this slot in a write for good.
+                        let _ = stream.set_write_timeout(Some(write_timeout));
                         let response = match read_request(&stream) {
                             Ok(request) => handle(&request),
                             Err(response) => response,
@@ -280,7 +344,80 @@ pub fn request(
 mod tests {
     use super::*;
 
+    /// Hands out one byte a call, `pause` apart.
+    struct Trickle<'a>(&'a [u8], Duration);
+    impl Read for Trickle<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            std::thread::sleep(self.1);
+            let Some((&b, rest)) = self.0.split_first() else {
+                return Ok(0);
+            };
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            buf[0] = b;
+            self.0 = rest;
+            Ok(1)
+        }
+    }
+
     #[test]
+    fn a_request_trickled_past_its_deadline_is_refused() {
+        let request = b"GET /status HTTP/1.1\r\nHost: x\r\n\r\n";
+        let quick = read_request_within(Trickle(request, Duration::ZERO), Duration::from_secs(5));
+        assert!(quick.is_ok_and(|r| r.path == "/status"));
+        // Each byte well within any per-read timeout, the whole request past its deadline.
+        let slow = Trickle(request, Duration::from_millis(20));
+        assert!(read_request_within(slow, Duration::from_millis(200)).is_err());
+    }
+
+    #[test]
+    fn a_body_that_never_comes_is_not_allocated_up_front() {
+        let request = b"POST /x HTTP/1.1\r\nContent-Length: 1000000\r\n\r\nabc";
+        assert!(read_request(&request[..]).is_err_and(|r| r.status == 400));
+    }
+
+    #[test]
+    fn slots_cap_open_connections_and_come_back() {
+        let open = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let taken: Vec<_> = (0..3).filter_map(|_| Slot::take(&open, 2)).collect();
+        assert_eq!(taken.len(), 2);
+        drop(taken);
+        assert!(Slot::take(&open, 2).is_some());
+    }
+
+    #[test]
+    fn a_client_that_never_reads_its_body_gives_the_connection_up() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (done, finished) = std::sync::mpsc::channel();
+        let done = std::sync::Mutex::new(done);
+        serve_with_write_timeout(listener, Duration::from_millis(300), move |_| {
+            let done = done.lock().unwrap().clone();
+            let mut response = Response::text(200, "application/octet-stream", "");
+            response.stream = Some(Box::new(move |mut stream: &TcpStream| {
+                // Far more than the loopback buffers of both ends hold.
+                let chunk = vec![0u8; 1 << 20];
+                let ended = (0..256).try_for_each(|_| stream.write_all(&chunk));
+                let _ = done.send(ended.is_err());
+            }));
+            response
+        })
+        .unwrap();
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .write_all(b"GET /font HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+        // The client keeps the socket open and reads nothing.
+        let gave_up = finished
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the handler is still blocked in a write");
+        assert!(gave_up, "the whole body went into a client that never read");
+        drop(client);
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn round_trip() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -316,6 +453,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_line_past_the_limit_is_a_400() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();

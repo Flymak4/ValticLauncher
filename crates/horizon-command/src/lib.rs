@@ -2,8 +2,11 @@
 //! literal/argument node trees with redirects, parsing that tries every
 //! relevant child and keeps the best result, completion suggestions, smart
 //! usage text and the vanilla error messages. Argument types live in
-//! [`args`]; the vanilla command tree in [`vanilla`].
+//! [`args`]; the vanilla command tree in [`vanilla`]. Brigadier is a library,
+//! not part of the pinned 26.3 sources, so a comment naming its classes
+//! describes the library this module ports.
 #![forbid(unsafe_code)]
+pub use horizon_client_core::suggestion::{Range, Suggestion};
 pub mod args;
 pub mod block;
 pub mod codec;
@@ -22,11 +25,16 @@ pub mod tree_world;
 pub mod vanilla;
 mod vanilla_order;
 
-pub use args::{Arg, ArgType, CustomCompletionAction, Registries, modify_custom_completions};
+pub use args::{
+    Arg, ArgType, CustomArgument, CustomArgumentKind, CustomCompletionAction, CustomSuggestion,
+    Registries, modify_custom_completions,
+};
 use horizon_client_core::text::Text;
 
 /// The command id of a mod's command (`Dispatcher::with_mod_commands`).
 pub const MOD_COMMAND: &str = "mod";
+/// The command id of the client's own `/profiler` (`Dispatcher::with_profiler`).
+pub const PROFILER_COMMAND: &str = "horizon:profiler";
 
 /// A command error (CommandSyntaxException): the message and, for parse
 /// errors, the input and cursor it occurred at.
@@ -40,6 +48,9 @@ pub struct CommandError {
     /// The translation key of the exception type, when known (the
     /// exception "type" vanilla code compares against).
     pub key: String,
+    /// Not a CommandSyntaxException: `Commands.performCommand`'s catch reports
+    /// it as `command.failed` and no result callback runs.
+    pub unexpected: bool,
 }
 impl CommandError {
     pub fn new(message: Text) -> Self {
@@ -49,7 +60,15 @@ impl CommandError {
             cursor: 0,
             literal_incorrect: false,
             key: String::new(),
+            unexpected: false,
         }
+    }
+    /// An exception that is not a CommandSyntaxException, as
+    /// `Commands.performCommand` catches it.
+    pub fn unexpected() -> Self {
+        let mut e = Self::tr("command.failed", &[]);
+        e.unexpected = true;
+        e
     }
     pub fn tr(key: &str, args: &[&dyn std::fmt::Display]) -> Self {
         let mut e = Self::new(Text::tr(key, args));
@@ -63,6 +82,7 @@ impl CommandError {
             cursor: reader.cursor,
             literal_incorrect: false,
             key: String::new(),
+            unexpected: false,
         }
     }
     pub fn tr_at(key: &str, args: &[&dyn std::fmt::Display], reader: &Reader) -> Self {
@@ -70,20 +90,24 @@ impl CommandError {
         e.key = key.to_owned();
         e
     }
-    /// CommandSyntaxException.getContext: up to ten characters before the
+    /// `CommandSyntaxException.getCursor`: the cursor as a Java `String`
+    /// index (UTF-16 units), the position vanilla reports.
+    pub fn java_cursor(&self) -> usize {
+        match &self.input {
+            Some(input) => java_index(input, self.cursor),
+            None => self.cursor,
+        }
+    }
+    /// Brigadier's command exception context: up to ten characters before the
     /// cursor followed by "<--[HERE]".
     pub fn context(&self) -> Option<String> {
         let input = self.input.as_ref()?;
-        let cursor = self.cursor.min(input.len());
-        let start = (0..=cursor.saturating_sub(10))
-            .rev()
-            .find(|&i| input.is_char_boundary(i))
-            .unwrap_or(0);
+        let cursor = char_floor(input, self.cursor);
         let mut out = String::new();
-        if cursor > 10 {
+        if java_index(input, cursor) > 10 {
             out.push_str("...");
         }
-        out.push_str(&input[start..cursor]);
+        out.push_str(&input[context_start(input, cursor)..cursor]);
         out.push_str("<--[HERE]");
         Some(out)
     }
@@ -94,7 +118,7 @@ impl CommandError {
                 "command.context.parse_error",
                 &[
                     self.message.clone(),
-                    Text::literal(self.cursor.to_string()),
+                    Text::literal(self.java_cursor().to_string()),
                     Text::literal(context),
                 ],
             ),
@@ -103,6 +127,36 @@ impl CommandError {
     }
 }
 pub type CmdResult<T> = Result<T, CommandError>;
+
+/// `cursor` moved back to the start of the character it falls in, and kept inside `input`.
+fn char_floor(input: &str, cursor: usize) -> usize {
+    let mut end = cursor.min(input.len());
+    while !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+/// A byte `cursor` into `input` as a Java `String` index: the UTF-16 units before it, which
+/// is how Brigadier counts the positions it reports.
+pub fn java_index(input: &str, cursor: usize) -> usize {
+    input[..char_floor(input, cursor)].encode_utf16().count()
+}
+
+/// The byte where the context of an error at `cursor` starts: ten Java chars (UTF-16 units)
+/// back, as Brigadier's `substring(Math.max(0, cursor - 10), cursor)`. Where that falls inside
+/// a surrogate pair, the half character is left out instead of shown broken.
+pub fn context_start(input: &str, cursor: usize) -> usize {
+    let target = java_index(input, cursor).saturating_sub(10);
+    let mut units = 0;
+    for (i, c) in input.char_indices() {
+        if units >= target {
+            return i;
+        }
+        units += c.len_utf16();
+    }
+    input.len()
+}
 
 /// Brigadier StringReader over a command line (byte cursor on char boundaries).
 #[derive(Clone, Debug)]
@@ -211,6 +265,15 @@ impl<'a> Reader<'a> {
         }
         &self.string[start..self.cursor]
     }
+    /// Every character up to the next space or the end of the line: a token that may hold `*`,
+    /// `:` or `/`. Empty when the reader is at a space or at the end.
+    pub fn read_token(&mut self) -> &'a str {
+        let start = self.cursor;
+        while self.can_read() && self.peek() != ' ' {
+            self.skip();
+        }
+        &self.string[start..self.cursor]
+    }
     pub fn read_string_until(&mut self, terminator: char) -> CmdResult<String> {
         let mut out = String::new();
         let mut escaped = false;
@@ -269,7 +332,6 @@ impl<'a> Reader<'a> {
     }
 }
 
-pub type Range = (usize, usize);
 #[derive(Clone, Debug)]
 pub enum NodeKind {
     Root,
@@ -285,6 +347,8 @@ pub struct Node {
     pub redirect: Option<usize>,
     /// Required permission level (0 everyone, 2 game masters, 4 owners).
     pub permission: u8,
+    /// The level needed to execute this node, independently of walking through it.
+    pub execution_permission: u8,
     /// A custom suggestion provider (`.suggests(...)`), used instead of the
     /// argument type's own suggestions.
     pub suggests: Option<Suggests>,
@@ -336,7 +400,7 @@ impl Node {
             NodeKind::Argument { name, .. } => name,
         }
     }
-    /// CommandNode.getUsageText.
+    /// Brigadier's node usage text.
     pub fn usage_text(&self) -> String {
         match &self.kind {
             NodeKind::Root => String::new(),
@@ -397,7 +461,7 @@ impl Context {
             .find(|a| a.name == name)
             .map(|a| &a.value)
     }
-    /// CommandContextBuilder.findSuggestionContext: the node whose children
+    /// Brigadier's suggestion context: the node whose children
     /// complete the text at `cursor`, and where that text starts.
     pub fn suggestion_context(&self, cursor: usize) -> (usize, usize, &Context) {
         if self.range.1 < cursor {
@@ -494,22 +558,6 @@ impl ParseResults {
         }
     }
 }
-/// A completion: replace `range` of the input with `text`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Suggestion {
-    pub range: Range,
-    pub text: String,
-    pub tooltip: Option<String>,
-    /// IntegerSuggestion: sorted numerically against other integers.
-    pub int_value: Option<i32>,
-}
-impl Suggestion {
-    /// Suggestion.apply.
-    pub fn apply(&self, input: &str) -> String {
-        let (s, e) = (self.range.0.min(input.len()), self.range.1.min(input.len()));
-        format!("{}{}{}", &input[..s], self.text, &input[e..])
-    }
-}
 /// SuggestionsBuilder: suggestions for the text from `start` to the cursor.
 pub struct SuggestionsBuilder<'a> {
     pub input: &'a str,
@@ -531,17 +579,9 @@ impl<'a> SuggestionsBuilder<'a> {
         self.remaining().to_lowercase()
     }
     pub fn suggest(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        if text != self.remaining() {
-            self.out.push(Suggestion {
-                range: (self.start, self.input.len()),
-                text,
-                tooltip: None,
-                int_value: None,
-            });
-        }
+        self.suggest_at(self.start, text);
     }
-    /// SuggestionsBuilder.suggest(int).
+    /// Brigadier's suggestions-builder `suggest(int)`.
     pub fn suggest_int(&mut self, value: i32) {
         self.out.push(Suggestion {
             range: (self.start, self.input.len()),
@@ -551,20 +591,51 @@ impl<'a> SuggestionsBuilder<'a> {
         });
     }
     pub fn suggest_tooltip(&mut self, text: impl Into<String>, tooltip: impl Into<String>) {
+        self.suggest_at_tooltip(self.start, text, tooltip);
+    }
+    /// `SuggestionsBuilder.suggest` for a replacement that starts `start` bytes into the input:
+    /// the text from there to the cursor is replaced, so a completion can apply to one token of a
+    /// longer text argument (a mod's greedy text being split into words). A `start` past the
+    /// input or inside a character suggests nothing, rather than panicking where the range is
+    /// used.
+    pub fn suggest_at(&mut self, start: usize, text: impl Into<String>) {
         let text = text.into();
-        if text != self.remaining() {
-            self.out.push(Suggestion {
-                range: (self.start, self.input.len()),
-                text,
-                tooltip: Some(tooltip.into()),
-                int_value: None,
-            });
+        if !self.replaces_something(start) || text == self.input[start..] {
+            return;
         }
+        self.out.push(Suggestion {
+            range: (start, self.input.len()),
+            text,
+            tooltip: None,
+            int_value: None,
+        });
+    }
+    /// [`Self::suggest_at`] with an explanation.
+    pub fn suggest_at_tooltip(
+        &mut self,
+        start: usize,
+        text: impl Into<String>,
+        tooltip: impl Into<String>,
+    ) {
+        let text = text.into();
+        if !self.replaces_something(start) || text == self.input[start..] {
+            return;
+        }
+        self.out.push(Suggestion {
+            range: (start, self.input.len()),
+            text,
+            tooltip: Some(tooltip.into()),
+            int_value: None,
+        });
+    }
+    /// Whether `start` can begin a replacement range of the input.
+    fn replaces_something(&self, start: usize) -> bool {
+        start <= self.input.len() && self.input.is_char_boundary(start)
     }
     pub fn offset(&self, start: usize) -> SuggestionsBuilder<'a> {
         SuggestionsBuilder::new(self.input, start)
     }
-    /// SuggestionsBuilder.add: keep another builder's suggestions (with their own ranges).
+    /// Brigadier's suggestions-builder `add`: keep another builder's suggestions (with their own ranges).
     pub fn add(&mut self, other: SuggestionsBuilder) {
         self.out.extend(other.out);
     }
@@ -603,7 +674,7 @@ pub fn compare_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
         }
     }
 }
-/// Suggestion.compareToIgnoreCase (IntegerSuggestion compares numerically).
+/// Case-insensitive text order, with IntegerSuggestion comparing numerically.
 fn compare_suggestions(a: &Suggestion, b: &Suggestion) -> std::cmp::Ordering {
     match (a.int_value, b.int_value) {
         (Some(x), Some(y)) => x.cmp(&y),
@@ -611,7 +682,10 @@ fn compare_suggestions(a: &Suggestion, b: &Suggestion) -> std::cmp::Ordering {
         _ => compare_ignore_case(&a.text, &b.text),
     }
 }
-/// Suggestions.create: merged, expanded to a common range and sorted case-insensitively.
+/// The longest completion text a suggestion packet carries: `ByteBufCodecs.STRING_UTF8` counts
+/// 32767 UTF-16 code units, which is what vanilla's reader and its client both enforce.
+const MAX_SUGGESTION_TEXT: usize = 32767;
+/// Brigadier's suggestions create: merged, expanded to a common range and sorted case-insensitively.
 pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Suggestion>) {
     if list.is_empty() {
         return ((0, 0), Vec::new());
@@ -622,13 +696,20 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
     let mut seen: std::collections::HashSet<(String, Option<String>)> =
         std::collections::HashSet::new();
     for s in list {
-        // Suggestion.expand: pad the text with the input around it.
+        // Brigadier's suggestion expand: pad the text with the input around it.
         let text = format!(
             "{}{}{}",
             &input[start..s.range.0],
             s.text,
             &input[s.range.1..end]
         );
+        // Padding grows the text past what the suggestion itself holds: a long prefix, and a
+        // suggestion starting later, expand to the whole merged range. Each one was within the
+        // packet's limit alone, so the expanded text is measured again and the ones that no
+        // longer fit are left out, keeping the others.
+        if text.encode_utf16().count() > MAX_SUGGESTION_TEXT {
+            continue;
+        }
         let expanded = Suggestion {
             range: (start, end),
             text,
@@ -642,6 +723,10 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
         if seen.insert((expanded.text.clone(), expanded.tooltip.clone())) {
             out.push(expanded);
         }
+    }
+    if out.is_empty() {
+        // Every completion was too long to send: nothing to show, and no range to show it in.
+        return ((0, 0), out);
     }
     let ints = out.iter().filter(|s| s.int_value.is_some()).count();
     if ints == 0 || ints == out.len() {
@@ -660,7 +745,7 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
 
 impl Suggests {
     /// The provider's candidates; `context` is the whole parse context
-    /// (CommandContextBuilder.build), whose arguments some providers read.
+    /// (the built parse context), whose arguments some providers read.
     pub fn suggest(&self, builder: &mut SuggestionsBuilder, reg: &Registries, context: &Context) {
         match self {
             Suggests::AdvancementCriteria => {
@@ -754,6 +839,21 @@ impl Suggests {
 /// command nesting.
 const MAX_PARSE_DEPTH: usize = 128;
 
+/// The most children one parse examines, over all its branches: each child a node's selection
+/// looks at counts once, and each child it then tries once more. Depth alone does not bound the
+/// work: a server's tree whose every level has two arguments leading to the same next level
+/// doubles the branches per word, so 40 words were 2^41 tries (Brigadier does the same), and a
+/// node with many children reached on many branches is scanned on each. A parse of vanilla's
+/// tree looks at the root's hundred-odd children and a few dozen more per level, so an
+/// `execute` nested almost to [`MAX_PARSE_DEPTH`] stays far below this; past it the whole
+/// command fails to parse.
+const MAX_PARSE_VISITS: usize = 100_000;
+
+/// The most nodes one usage line follows down a chain of single children before it ends in
+/// "...". Vanilla's longest such chain is 8 nodes; a server's tree may chain hundreds of
+/// thousands, which Brigadier follows by recursion and string concatenation per node.
+const MAX_USAGE_CHAIN: usize = 64;
+
 /// The command tree (CommandDispatcher). Node 0 is the root.
 #[derive(Clone, Debug)]
 pub struct Dispatcher {
@@ -764,6 +864,8 @@ impl Default for Dispatcher {
         Self::new()
     }
 }
+/// `/profiler start`'s GPU literals: pass timings, and pass timings with their parts and counters.
+pub const PROFILER_GPU: [&str; 2] = ["gpu", "gpu_detail"];
 impl Dispatcher {
     pub fn new() -> Self {
         Self {
@@ -773,6 +875,7 @@ impl Dispatcher {
                 command: None,
                 redirect: None,
                 permission: 0,
+                execution_permission: 0,
                 suggests: None,
                 restricted: false,
             }],
@@ -793,7 +896,7 @@ impl Dispatcher {
             NodeKind::Argument { name, .. } => name.clone(),
             NodeKind::Root => String::new(),
         };
-        // CommandNode.addChild merges same-named children.
+        // Same-named children merge.
         if let Some(&existing) = self.nodes[parent]
             .children
             .iter()
@@ -808,6 +911,7 @@ impl Dispatcher {
             command: None,
             redirect: None,
             permission,
+            execution_permission: 0,
             suggests: None,
             restricted: false,
         });
@@ -843,7 +947,12 @@ impl Dispatcher {
         self.nodes[node].permission = level;
         node
     }
-    /// This tree plus the commands mods own (`docs/mods.md`), so the chat
+    /// Require a level to run this node without restricting access to its children.
+    pub fn requires_execution(&mut self, node: usize, level: u8) -> usize {
+        self.nodes[node].execution_permission = level;
+        node
+    }
+    /// This tree plus the commands mods own (`docs/modding/src/how-to/content-mods.md`), so the chat
     /// colours and completes them like the others. Every player may use one,
     /// and the text after its name goes to the mod as it was typed.
     pub fn with_mod_commands<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Dispatcher {
@@ -856,6 +965,56 @@ impl Dispatcher {
         }
         d
     }
+    /// `/profiler` alone, which the client parses its chat line with.
+    pub fn profiler() -> Dispatcher {
+        Dispatcher::new().with_profiler()
+    }
+    /// This tree plus `/profiler`, which the client answers itself, so chat completes its real options.
+    pub fn with_profiler(&self) -> Dispatcher {
+        let mut d = self.clone();
+        if d.find("profiler").is_some() {
+            return d;
+        }
+        let command = d.literal(0, "profiler");
+        for action in ["start", "stop"] {
+            let action_node = d.literal(command, action);
+            d.executes(action_node, PROFILER_COMMAND);
+            for side in ["client", "server"] {
+                let side = d.literal(action_node, side);
+                d.executes(side, PROFILER_COMMAND);
+                if action == "start" {
+                    for gpu in PROFILER_GPU {
+                        let gpu = d.literal(side, gpu);
+                        d.executes(gpu, PROFILER_COMMAND);
+                    }
+                }
+            }
+            if action == "start" {
+                for gpu in PROFILER_GPU {
+                    let gpu = d.literal(action_node, gpu);
+                    d.executes(gpu, PROFILER_COMMAND);
+                }
+            }
+        }
+        let status = d.literal(command, "status");
+        d.executes(status, PROFILER_COMMAND);
+        for action in ["open", "share"] {
+            let action = d.literal(command, action);
+            d.executes(action, PROFILER_COMMAND);
+            let id = d.argument(action, "id", ArgType::Word);
+            d.executes(id, PROFILER_COMMAND);
+        }
+        let mark = d.literal(command, "mark");
+        let name = d.argument(mark, "name", ArgType::Greedy);
+        d.executes(name, PROFILER_COMMAND);
+        d
+    }
+    /// Whether this tree's `/profiler` is the one [`Self::with_profiler`] adds, not a server's or a mod's of the same name.
+    pub fn has_horizon_profiler(&self) -> bool {
+        self.parse("profiler status", &Registries::default())
+            .executable()
+            .is_ok_and(|(_, command)| command == PROFILER_COMMAND)
+    }
     /// A root literal by name.
     pub fn find(&self, name: &str) -> Option<usize> {
         self.nodes[0]
@@ -864,8 +1023,14 @@ impl Dispatcher {
             .copied()
             .find(|&c| self.nodes[c].name() == name)
     }
-    fn relevant(&self, node: usize, reader: &Reader) -> Vec<usize> {
+    /// The children of `node` worth trying (Brigadier's `getRelevantNodes`). Looking at them is
+    /// charged to `visits` first, and past [`MAX_PARSE_VISITS`] none are.
+    fn relevant(&self, node: usize, reader: &Reader, visits: &mut usize) -> Vec<usize> {
         let children = &self.nodes[node].children;
+        *visits = visits.saturating_add(children.len());
+        if *visits > MAX_PARSE_VISITS {
+            return Vec::new();
+        }
         let literals: Vec<usize> = children
             .iter()
             .copied()
@@ -933,12 +1098,14 @@ impl Dispatcher {
         reg: &Registries,
         level: u8,
         depth: usize,
+        visits: &mut usize,
     ) -> ParseResults {
-        if depth >= MAX_PARSE_DEPTH {
+        if depth >= MAX_PARSE_DEPTH || *visits > MAX_PARSE_VISITS {
             // A crafted command nested through `execute … run` (which redirects
             // back to the root) recurses here per level; stop before it
             // overflows the parsing thread's stack. The branch yields no result,
-            // so the whole command simply fails to parse.
+            // so the whole command simply fails to parse. Past the visit budget
+            // every branch stops the same way, and `parse_counted` fails the parse.
             return ParseResults {
                 context: so_far.clone(),
                 input: input.to_owned(),
@@ -952,9 +1119,13 @@ impl Dispatcher {
             string: input,
             cursor,
         };
-        for child in self.relevant(node, &original) {
+        for child in self.relevant(node, &original, visits) {
             if self.nodes[child].permission > level {
                 continue;
+            }
+            *visits += 1;
+            if *visits > MAX_PARSE_VISITS {
+                break;
             }
             let mut context = so_far.clone();
             let mut reader = original.clone();
@@ -975,7 +1146,9 @@ impl Dispatcher {
                 errors.push((child, e));
                 continue;
             }
-            context.command = self.nodes[child].command;
+            context.command = self.nodes[child]
+                .command
+                .filter(|_| self.nodes[child].execution_permission <= level);
             let redirect = self.nodes[child].redirect;
             if reader.can_read_n(if redirect.is_none() { 2 } else { 1 }) {
                 reader.skip();
@@ -989,6 +1162,7 @@ impl Dispatcher {
                         reg,
                         level,
                         depth + 1,
+                        visits,
                     );
                     context.child = Some(Box::new(parse.context));
                     return ParseResults {
@@ -1006,6 +1180,7 @@ impl Dispatcher {
                     reg,
                     level,
                     depth + 1,
+                    visits,
                 ));
             } else {
                 potentials.push(ParseResults {
@@ -1017,8 +1192,9 @@ impl Dispatcher {
             }
         }
         if !potentials.is_empty() {
-            // Prefer fully read input, then results without errors (stable sort).
-            potentials.sort_by_key(|p| (p.can_read(), !p.errors.is_empty()));
+            // Prefer fully read input, then results without errors. An executable
+            // result wins an otherwise complete tie; all other ties stay stable.
+            potentials.sort_by_key(|p| (p.can_read(), !p.errors.is_empty(), !p.is_valid()));
             return potentials.swap_remove(0);
         }
         ParseResults {
@@ -1028,16 +1204,42 @@ impl Dispatcher {
             errors,
         }
     }
-    /// CommandDispatcher.parse from the start of `input` (no leading slash).
+    /// The dispatcher parses from the start of `input` (no leading slash).
     pub fn parse(&self, input: &str, reg: &Registries) -> ParseResults {
         self.parse_at(input, 0, reg)
     }
     /// Parse starting at byte `start` (after a leading '/').
     pub fn parse_at(&self, input: &str, start: usize, reg: &Registries) -> ParseResults {
-        let context = Context::new(0, start);
-        self.parse_nodes(0, input, start, &context, reg, reg.permission, 0)
+        self.parse_counted(input, start, reg).0
     }
-    /// CommandDispatcher.getCompletionSuggestions at `cursor`: brigadier
+    /// [`Self::parse_at`], and how many children the parse examined. A parse past
+    /// [`MAX_PARSE_VISITS`] fails as a whole, as an unknown command: what it found before the
+    /// budget ran out depends on the order it went in.
+    fn parse_counted(&self, input: &str, start: usize, reg: &Registries) -> (ParseResults, usize) {
+        let context = Context::new(0, start);
+        let mut visits = 0;
+        let parse = self.parse_nodes(
+            0,
+            input,
+            start,
+            &context,
+            reg,
+            reg.permission,
+            0,
+            &mut visits,
+        );
+        if visits > MAX_PARSE_VISITS {
+            let failed = ParseResults {
+                context,
+                input: input.to_owned(),
+                cursor: start,
+                errors: Vec::new(),
+            };
+            return (failed, visits);
+        }
+        (parse, visits)
+    }
+    /// Brigadier's completion suggestions at `cursor`: it
     /// lists every child, whatever its requirement.
     pub fn suggestions(
         &self,
@@ -1103,32 +1305,57 @@ impl Dispatcher {
             all.extend(builder.out);
         }
         let (range, list) = merge_suggestions(truncated, all);
+        // The reply's range is the builder's, covering the token being typed, even when nothing
+        // is suggested locally: a node that asks the server (`ask_server`, and the mods' own
+        // `tab_complete` answers for the free `id`) brings its completions with the server's
+        // reply, which the chat applies to that token. The empty list's `(0, 0)` would paste
+        // what the server adds at the start of the line.
+        let range = if list.is_empty() {
+            (start, truncated.len())
+        } else {
+            range
+        };
         (range, list, ask)
     }
+    /// Brigadier's `getSmartUsage(node, source, optional, deep)`. Brigadier recurses once per
+    /// node of a chain of single children and prefixes each level's text on the way back; this
+    /// walks the chain in a loop and joins the parts once, and stops after
+    /// [`MAX_USAGE_CHAIN`] nodes with "...".
     fn smart_usage_of(&self, node: usize, optional: bool, deep: bool, level: u8) -> Option<String> {
-        let n = &self.nodes[node];
-        if n.permission > level {
+        if self.nodes[node].permission > level {
             return None;
         }
-        let this = if optional {
-            format!("[{}]", n.usage_text())
-        } else {
-            n.usage_text()
-        };
-        let child_optional = n.command.is_some();
-        let (open, close) = if child_optional {
-            ("[", "]")
-        } else {
-            ("(", ")")
-        };
-        if !deep {
+        let mut parts: Vec<String> = Vec::new();
+        let (mut node, mut optional, mut deep) = (node, optional, deep);
+        loop {
+            if parts.len() >= MAX_USAGE_CHAIN {
+                parts.push("...".to_owned());
+                break;
+            }
+            let n = &self.nodes[node];
+            let this = if optional {
+                format!("[{}]", n.usage_text())
+            } else {
+                n.usage_text()
+            };
+            let child_optional = n.command.is_some();
+            let (open, close) = if child_optional {
+                ("[", "]")
+            } else {
+                ("(", ")")
+            };
+            if deep {
+                parts.push(this);
+                break;
+            }
             if let Some(r) = n.redirect {
                 let target = if r == 0 {
                     "...".to_owned()
                 } else {
                     format!("-> {}", self.nodes[r].usage_text())
                 };
-                return Some(format!("{this} {target}"));
+                parts.push(format!("{this} {target}"));
+                break;
             }
             let children: Vec<usize> = n
                 .children
@@ -1137,12 +1364,13 @@ impl Dispatcher {
                 .filter(|&c| self.nodes[c].permission <= level)
                 .collect();
             if children.len() == 1 {
-                if let Some(usage) =
-                    self.smart_usage_of(children[0], child_optional, child_optional, level)
-                {
-                    return Some(format!("{this} {usage}"));
-                }
-            } else if children.len() > 1 {
+                // The child's permission passed the filter, so its usage exists: follow it.
+                parts.push(this);
+                (node, optional, deep) = (children[0], child_optional, child_optional);
+                continue;
+            }
+            if children.len() > 1 {
+                // Each child's usage here is deep: its own text only, no further recursion.
                 let mut child_usage: Vec<String> = Vec::new();
                 for &c in &children {
                     if let Some(u) = self.smart_usage_of(c, child_optional, true, level)
@@ -1153,7 +1381,7 @@ impl Dispatcher {
                 }
                 if child_usage.len() == 1 {
                     let usage = &child_usage[0];
-                    return Some(format!(
+                    parts.push(format!(
                         "{this} {}",
                         if child_optional {
                             format!("[{usage}]")
@@ -1161,19 +1389,23 @@ impl Dispatcher {
                             usage.clone()
                         }
                     ));
+                    break;
                 }
                 if child_usage.len() > 1 {
                     let alternatives: Vec<String> = children
                         .iter()
                         .map(|&c| self.nodes[c].usage_text())
                         .collect();
-                    return Some(format!("{this} {open}{}{close}", alternatives.join("|")));
+                    parts.push(format!("{this} {open}{}{close}", alternatives.join("|")));
+                    break;
                 }
             }
+            parts.push(this);
+            break;
         }
-        Some(this)
+        Some(parts.join(" "))
     }
-    /// CommandDispatcher.getSmartUsage: one line per child of `node`.
+    /// Brigadier's smart usage: one line per child of `node`.
     pub fn smart_usage(&self, node: usize, level: u8) -> Vec<(usize, String)> {
         let optional = self.nodes[node].command.is_some();
         self.nodes[node]
@@ -1187,5 +1419,7 @@ impl Dispatcher {
     }
 }
 
+#[cfg(test)]
+mod particle_option_tests;
 #[cfg(test)]
 mod tests;

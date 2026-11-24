@@ -2,20 +2,42 @@
 """Dump Minecraft NBT files (level.dat, data/*.dat, players/*.dat) and Anvil
 region chunks (region/, entities/, poi/) as readable SNBT-like text.
 
+Usage:
   anvil_dump.py FILE.dat [PATH...]
   anvil_dump.py r.0.0.mca [CX CZ] [PATH...]
 
-PATH selects nested keys (for example `sections 3 block_states`). Long
-arrays are summarised unless --full is given; --typed suffixes numbers
-with their NBT type (b, s, l, f, d; plain ints are TAG_Int). Used to compare Horizon saves
-with worlds written by the vanilla server.
+PATH selects nested keys (for example `sections 3 block_states`).
+
+Options:
+  --full      print long arrays whole instead of summarising them
+  --typed     suffix numbers with their NBT type (b, s, l, f, d; plain ints are TAG_Int)
+  -h, --help  print this help and exit
+
+Used to compare Horizon saves with worlds written by the vanilla server.
 """
 import gzip
 import io
 import json
+import os
 import struct
 import sys
 import zlib
+
+try:
+    from . import modified_utf8
+except ImportError:
+    import modified_utf8
+
+USAGE = __doc__
+
+
+def read_string(f):
+    """A TAG_String payload: two-byte length, then modified UTF-8 bytes."""
+    n = struct.unpack('>H', f.read(2))[0]
+    raw = f.read(n)
+    if len(raw) != n:
+        raise ValueError('truncated NBT string: want %d bytes, got %d' % (n, len(raw)))
+    return modified_utf8.decode_mutf8(raw)
 
 
 def read_tag(f, tag_id):
@@ -35,8 +57,7 @@ def read_tag(f, tag_id):
         n = struct.unpack('>i', f.read(4))[0]
         return ('B', list(struct.unpack(f'>{n}b', f.read(n))))
     if tag_id == 8:
-        n = struct.unpack('>H', f.read(2))[0]
-        return f.read(n).decode('utf-8', 'replace')
+        return read_string(f)
     if tag_id == 9:
         inner, n = struct.unpack('>bi', f.read(5))
         return [read_tag(f, inner) for _ in range(max(n, 0))]
@@ -46,8 +67,7 @@ def read_tag(f, tag_id):
             t = f.read(1)[0]
             if t == 0:
                 return out
-            n = struct.unpack('>H', f.read(2))[0]
-            name = f.read(n).decode('utf-8', 'replace')
+            name = read_string(f)
             out[name] = read_tag(f, t)
     if tag_id == 11:
         n = struct.unpack('>i', f.read(4))[0]
@@ -82,12 +102,24 @@ def region_chunks(path):
             continue
         start = off * 4096
         length = struct.unpack('>i', data[start:start + 4])[0]
-        codec = data[start + 4] & 0x7F
-        payload = data[start + 5:start + 4 + length]
+        codec = data[start + 4]
+        if codec & 0x80:
+            # A chunk too large for the region: a stub here, its stream in c.X.Z.mcc beside the
+            # region, named by absolute chunk coordinates.
+            _, rx, rz, _ = os.path.basename(path).split('.')
+            mcc = 'c.%d.%d.mcc' % (int(rx) * 32 + (i & 31), int(rz) * 32 + (i >> 5))
+            with open(os.path.join(os.path.dirname(path), mcc), 'rb') as stream:
+                payload = stream.read()
+        else:
+            payload = data[start + 5:start + 4 + length]
+        codec &= 0x7F
         if codec == 1:
             payload = gzip.decompress(payload)
         elif codec == 2:
             payload = zlib.decompress(payload)
+        elif codec != 3:
+            raise ValueError('%s: chunk (%d, %d) has unsupported compression type %d' % (
+                path, i & 31, i >> 5, codec))
         out[(i & 31, i >> 5)] = read_named(payload)
     return out
 
@@ -119,11 +151,14 @@ def select(v, path):
 
 
 def main(argv):
+    if '--help' in argv or '-h' in argv:
+        print(USAGE)
+        return 0
     full = '--full' in argv
     typed = '--typed' in argv
     argv = [a for a in argv if a not in ('--full', '--typed')]
     if not argv:
-        print(__doc__)
+        print(USAGE)
         return 1
     path = argv[0]
     rest = argv[1:]

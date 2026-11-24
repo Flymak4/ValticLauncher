@@ -6,12 +6,13 @@
 
 use crate::{
     admin::{self, Action},
-    backup,
-    config::Config,
-    engine,
+    backup, engine,
     http::{self, Request, Response},
-    panel, settings,
-    update::{self, Install},
+    panel, settings, update,
+};
+use horizon_server_launch::{
+    Install,
+    config::{self, Config},
 };
 use serde_json::{Value, json};
 use std::{
@@ -157,8 +158,8 @@ pub const ROUTES: [Route; 33] = [
     Route {
         method: "POST",
         path: "/api/v1/restore",
-        takes: "`{\"name\": \"<backup>\", \"dimension\": \"minecraft:the_nether\"}` (`dimension` optional)",
-        answers: "`{\"name\": \"<backup>\", \"dimension\": \"<id>\" or null}`",
+        takes: "`{\"name\": \"<backup>\", \"dimension\": \"minecraft:the_nether\"}` (`name` must be a nonblank string; `dimension` is optional)",
+        answers: "`{\"name\": \"<backup>\", \"dimension\": \"<id>\" or null}`; `400` if no backup name is given",
         what: "Restart the game with that backup's world, or only one dimension of it (what it replaces is kept in backups/)",
     },
     Route {
@@ -186,8 +187,8 @@ pub const ROUTES: [Route; 33] = [
         method: "GET",
         path: "/api/v1/mods",
         takes: "",
-        answers: "`engine` (`found`, `target`, `base`, `horizon`, `hooks`) and `native` (id, version, sha256), from the `native-mods.json` the launcher wrote beside the game program",
-        what: "The native mods the server's game program was built with",
+        answers: "`mods` (id, version) from the running engine's LoadedMods inventory; `provenance` contains `engine` (found, target, base, horizon, hooks) and `native` (id, version, sha256) from the configured program's native-mods.json. 409 when the runtime inventory is unavailable",
+        what: "The packages loaded by the running server, with build provenance separate",
     },
     Route {
         method: "POST",
@@ -341,6 +342,8 @@ impl Log {
 
 /// How long a game started on another release has to come up before the switch is undone.
 pub const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
+/// The longest a new release may take to come up: a day.
+pub const MAX_UPDATE_TIMEOUT: Duration = Duration::from_secs(24 * 3600);
 
 /// Updates and rollbacks (update.rs): what the check found, what is under way, how the last one ended.
 #[derive(Default)]
@@ -387,6 +390,8 @@ pub struct Shared {
     pub event_added: std::sync::Condvar,
     /// The management protocol's connections, which its notifications go to (management.rs).
     pub management: crate::management::Clients,
+    /// `[proxy]`'s listener, when it is on (proxy/mod.rs).
+    pub proxy: Mutex<Option<crate::proxy::Proxy>>,
 }
 
 impl Shared {
@@ -420,7 +425,15 @@ impl Shared {
             events: Mutex::default(),
             event_added: std::sync::Condvar::new(),
             management: crate::management::Clients::default(),
+            proxy: Mutex::new(None),
         })
+    }
+
+    /// What `[proxy]` is told as the game starts, stops and ends (proxy/mod.rs); nothing when it is off.
+    pub fn proxy(&self, tell: impl FnOnce(&crate::proxy::Proxy)) {
+        if let Some(proxy) = self.proxy.lock().unwrap().as_ref() {
+            tell(proxy);
+        }
     }
 
     /// Ends an update or rollback: its outcome, in the log and in `status`.
@@ -462,7 +475,16 @@ impl Shared {
             update.busy = Some("Looking for the newest release".into());
         }
         if let Some(tag) = tag {
-            if !install.release(&tag).is_dir() || tag.contains(['/', '\\']) {
+            // A plain release name, as `update::unpack` requires: ".." is a folder without a slash, and
+            // would point `current` at the install's root.
+            // On Windows `releases\C:` joins to the drive-relative path `C:`, so a tag with a colon
+            // is refused too, and it must be exactly one normal path component.
+            let mut parts = std::path::Path::new(&tag).components();
+            let plain = !tag.starts_with('.')
+                && !tag.contains(['/', '\\', ':'])
+                && matches!(parts.next(), Some(std::path::Component::Normal(_)))
+                && parts.next().is_none();
+            if !plain || !install.release(&tag).is_dir() {
                 self.update.lock().unwrap().busy = None;
                 return Err(format!(
                     "{tag} isn't installed (`horizon-server update` downloads it)"
@@ -640,7 +662,7 @@ pub fn start(shared: Arc<Shared>) -> Result<Endpoint, String> {
         "" => random_token(),
         token => token.to_owned(),
     };
-    let public = !crate::config::private(address.ip());
+    let public = !config::private(address.ip());
     if public {
         crate::supervisor::note(
             &shared,
@@ -721,7 +743,8 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
             let line = serde_json::from_slice::<Value>(&request.body)
                 .ok()
                 .and_then(|v| v["line"].as_str().map(str::to_owned));
-            let Some(line) = line.filter(|l| !l.trim().is_empty() && !l.contains('\n')) else {
+            let Some(line) = line.filter(|l| !l.trim().is_empty() && !l.contains(['\n', '\r']))
+            else {
                 return Response::error(400, "the body must be {\"line\": \"<one command>\"}");
             };
             if shared.state.lock().unwrap().phase != Phase::Running {
@@ -775,7 +798,14 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
         }
         ("POST", "/api/v1/restore") => {
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
-            match backup::find(&shared.dir, body["name"].as_str().unwrap_or_default()) {
+            let Some(name) = body["name"]
+                .as_str()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            else {
+                return Response::error(400, "a backup name is required");
+            };
+            match backup::find(&shared.dir, name) {
                 Ok(name) => {
                     let dimension = match body["dimension"].as_str() {
                         None => None,
@@ -793,9 +823,9 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
         }
         ("POST", "/api/v1/update") => {
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
-            let timeout = body["timeout"]
-                .as_u64()
-                .map_or(UPDATE_TIMEOUT, Duration::from_secs);
+            let timeout = body["timeout"].as_u64().map_or(UPDATE_TIMEOUT, |s| {
+                Duration::from_secs(s.max(1)).min(MAX_UPDATE_TIMEOUT)
+            });
             match shared.start_update(body["tag"].as_str().map(str::to_owned), timeout) {
                 Ok(()) => Response::json(200, &json!({ "ok": true })),
                 Err(e) => Response::error(409, &e),
@@ -946,6 +976,22 @@ fn patch_config(shared: &Shared, body: &[u8]) -> Response {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A shorter wait for the endpoint file in tests that expect it never to appear.
+    pub(crate) static ENDPOINT_WAIT: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// How long `Client::open` waits for the endpoint file of a server that holds the lock.
+fn endpoint_wait() -> Duration {
+    #[cfg(test)]
+    if let Some(wait) = ENDPOINT_WAIT.with(|w| w.get()) {
+        return wait;
+    }
+    Duration::from_secs(5)
+}
+
 /// The API of the server running in a folder, for the CLI.
 pub struct Client {
     address: SocketAddr,
@@ -960,7 +1006,7 @@ impl Client {
         }
         // The supervisor writes the endpoint just after taking the lock: give it a moment.
         let path = dir.join(ENDPOINT);
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + endpoint_wait();
         let text = loop {
             match std::fs::read_to_string(&path) {
                 Ok(text) => break text,
@@ -1041,6 +1087,40 @@ impl Client {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn an_update_names_a_release_not_a_folder_around_it() {
+        let root = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("horizon-server-update-tag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("releases/v2")).unwrap();
+        let dir = root.join("server");
+        std::fs::create_dir_all(&dir).unwrap();
+        let shared = Shared::with_install(&dir, Some(Install { root: root.clone() }));
+        for tag in ["..", ".", "", ".hidden", "v2/../v2", "..\\x", "C:", "C:x"] {
+            let err = shared
+                .start_update(Some(tag.into()), Duration::from_secs(1))
+                .unwrap_err();
+            assert!(err.contains("isn't installed"), "{tag:?}: {err}");
+            assert!(shared.update.lock().unwrap().pending.is_none(), "{tag:?}");
+        }
+        shared
+            .start_update(Some("v2".into()), Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            shared
+                .update
+                .lock()
+                .unwrap()
+                .pending
+                .as_ref()
+                .map(|p| p.0.as_str()),
+            Some("v2")
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn tokens_compare_whole() {
         assert!(same_token("abc123", "abc123"));
@@ -1092,6 +1172,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn auth_and_command_replies_match_api_v1_goldens() {
         let golden: Value =
             serde_json::from_str(include_str!("../testdata/api-v1-auth-command.json")).unwrap();
@@ -1381,6 +1462,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_backup_whose_flush_fails_turns_saving_back_on() {
         let dir = std::env::temp_dir().join(format!("horizon-server-flush-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1391,7 +1473,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         std::fs::write(
-            engine::control_path(&dir),
+            horizon_server_launch::control_path(&dir),
             json!({"port": port, "token": "t"}).to_string(),
         )
         .unwrap();
@@ -1436,10 +1518,11 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_api_wants_its_token() {
         let dir = std::env::temp_dir().join(format!("horizon-server-api-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".horizon")).unwrap();
-        std::fs::write(dir.join(crate::config::FILE), crate::config::TEMPLATE).unwrap();
+        std::fs::write(dir.join(config::FILE), config::TEMPLATE).unwrap();
         let shared = Shared::new(&dir);
         let _endpoint = start(shared.clone()).unwrap();
         let v: Value =
@@ -1499,6 +1582,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_token_and_a_port_from_server_toml() {
         let dir =
             std::env::temp_dir().join(format!("horizon-server-api-fixed-{}", std::process::id()));
@@ -1509,13 +1593,13 @@ mod tests {
             .unwrap()
             .port();
         let token = "a-token-for-the-discord-bot";
-        let toml = crate::config::TEMPLATE
+        let toml = config::TEMPLATE
             .replace(
                 "[api]\nbind = \"\"",
                 &format!("[api]\nbind = \"127.0.0.1:{port}\""),
             )
             .replace("token = \"\"", &format!("token = \"{token}\""));
-        std::fs::write(dir.join(crate::config::FILE), toml).unwrap();
+        std::fs::write(dir.join(config::FILE), toml).unwrap();
         let _endpoint = start(Shared::new(&dir)).unwrap();
         let address: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let get = |token: &str| {
@@ -1599,9 +1683,9 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("horizon-server-api-admin-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("backups")).unwrap();
-        let toml = crate::config::TEMPLATE
-            .replace("token = \"\"", "token = \"a-token-for-the-discord-bot\"");
-        std::fs::write(dir.join(crate::config::FILE), toml).unwrap();
+        let toml =
+            config::TEMPLATE.replace("token = \"\"", "token = \"a-token-for-the-discord-bot\"");
+        std::fs::write(dir.join(config::FILE), toml).unwrap();
         std::fs::write(
             dir.join("backups/2026-10-31T12-00-00Z-manual.zip"),
             b"PK\x05\x06zip",
@@ -1643,7 +1727,7 @@ mod tests {
             outcome["restart"],
             json!(["server.max_players", "world.difficulty"])
         );
-        let saved = crate::config::Config::load(&dir).unwrap();
+        let saved = config::Config::load(&dir).unwrap();
         assert_eq!(
             (saved.world.difficulty.as_str(), saved.server.max_players),
             ("hard", 50)
@@ -1653,6 +1737,7 @@ mod tests {
             "api.allow_public",
             "panel.bind",
             "properties.enable-rcon",
+            "anticheat.strikes=",
         ] {
             let (status, _) = call(
                 "PATCH",
@@ -1669,10 +1754,7 @@ mod tests {
             json!({ "changes": { "world.difficulty": "brutal" } }),
         );
         assert_eq!(status, 400);
-        assert_eq!(
-            crate::config::Config::load(&dir).unwrap().world.difficulty,
-            "hard"
-        );
+        assert_eq!(config::Config::load(&dir).unwrap().world.difficulty, "hard");
 
         let name = "2026-10-31T12-00-00Z-manual.zip";
         let response = route(
@@ -1708,6 +1790,42 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn restore_requires_a_nonblank_backup_name() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-server-restore-validation-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("backups")).unwrap();
+        // One backup: a blank name used to match it as a prefix and restore it (#20180).
+        std::fs::write(root.join("backups/2026-01-01_00-00-00-manual.zip"), b"zip").unwrap();
+        let shared = Shared::with_install(&root, None);
+        for body in [
+            "",
+            "{}",
+            r#"{"name":null}"#,
+            r#"{"name":42}"#,
+            r#"{"name":""}"#,
+            r#"{"name":" "}"#,
+        ] {
+            let response = route(
+                &shared,
+                &Request {
+                    method: "POST".into(),
+                    path: "/api/v1/restore".into(),
+                    query: String::new(),
+                    headers: Vec::new(),
+                    body: body.as_bytes().to_vec(),
+                },
+            );
+            assert_eq!(response.status, 400, "{body:?}");
+            assert!(shared.restore.lock().unwrap().is_none(), "{body:?}");
+            assert!(!shared.restart.load(Ordering::SeqCst), "{body:?}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     fn backup_reply(mut response: Response) -> Value {
         let body = if let Some(write) = response.stream.take() {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1736,6 +1854,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn backup_replies_match_api_v1_goldens() {
         let golden: Value =
             serde_json::from_str(include_str!("../testdata/api-v1-backups.json")).unwrap();
@@ -1839,8 +1958,8 @@ mod tests {
             std::env::temp_dir().join(format!("horizon-server-api-stopped-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(crate::config::FILE), crate::config::TEMPLATE).unwrap();
-        crate::config::update(&dir, "server", "online_mode", toml::Value::Boolean(false)).unwrap();
+        std::fs::write(dir.join(config::FILE), config::TEMPLATE).unwrap();
+        config::update(&dir, "server", "online_mode", toml::Value::Boolean(false)).unwrap();
         let shared = Shared::with_install(&dir, None);
         shared.set_phase(Phase::Stopped);
         let request = |method: &str, path: &str, body: &[u8]| {

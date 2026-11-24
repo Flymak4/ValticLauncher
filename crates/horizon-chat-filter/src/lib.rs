@@ -1,8 +1,8 @@
 //! The dedicated server's chat filter (docs/chat-filter.md), without the game: `server.toml`'s
 //! `[chat_filter]`, the matcher for the slur list (`data/slurs.txt`, or the owner's `words_file`), and
 //! the escalation (a refused message, then a mute, then a temporary ban), with the mutes kept in a file
-//! so that they outlive a restart. The server's hub (`horizon_client::lan`) asks it before it relays a
-//! player's text and carries out what it decides.
+//! so that they outlive a restart. The server's hub (`horizon_client::lan`) asks it, through the engine's
+//! `horizon_server_files::chat_guard` hook, before it relays a player's text, and carries out what it decides.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 mod normalise;
 
+use horizon_server_files::chat_guard::{self, ChatGuard, Loaded, Place};
+pub use horizon_server_files::chat_guard::{Action, Mute};
 pub use horizon_server_files::duration::{
     DurationUnit, duration_parts, duration_text, now_millis, parse_duration,
 };
@@ -80,6 +82,14 @@ impl Config {
         if self.window_minutes == 0 {
             return Err("chat_filter.window_minutes must be 1 or more".into());
         }
+        // A mute or a ban that lasts no time would lift itself the moment it is given, so the hit
+        // that was meant to stop the player would only refuse one more message.
+        if self.mute_after > 0 && self.mute_minutes == 0 {
+            return Err("chat_filter.mute_minutes must be 1 or more when mute_after is".into());
+        }
+        if self.tempban_after > 0 && self.tempban_hours == 0 {
+            return Err("chat_filter.tempban_hours must be 1 or more when tempban_after is".into());
+        }
         Ok(())
     }
 }
@@ -105,7 +115,7 @@ struct Entry {
 #[derive(Debug)]
 pub struct Filter {
     entries: Vec<Entry>,
-    by_first: [Vec<u16>; 27],
+    by_first: [Vec<usize>; 27],
     /// Words never matched: exact (`false`) or as a prefix (`true`).
     allowed: Vec<(Vec<Run>, bool)>,
 }
@@ -144,7 +154,7 @@ impl Filter {
             let Some(first) = runs.first() else {
                 continue;
             };
-            f.by_first[usize::from(first.letter)].push(f.entries.len() as u16);
+            f.by_first[usize::from(first.letter)].push(f.entries.len());
             f.entries.push(Entry { runs, kind });
         }
         f
@@ -168,24 +178,14 @@ impl Filter {
         let t = Text::new(text);
         let runs = &t.runs;
         for &(start, end) in t.words.iter().chain(&t.spaced) {
-            let word = &runs[start..end];
-            if self.is_allowed(word) {
-                continue;
-            }
-            for at in 0..word.len() {
-                for &e in &self.by_first[usize::from(word[at].letter)] {
-                    let e = &self.entries[usize::from(e)];
-                    let whole = e.kind == Kind::Whole;
-                    if (!whole || at == 0) && fits(&e.runs, &word[at..], whole) {
-                        return true;
-                    }
-                }
+            if self.word_hits(&runs[start..end]) {
+                return true;
             }
         }
         // Spread entries over the whole text, from the start of a word, across at least two.
         for (w, &at) in t.joined_at.iter().enumerate() {
             for &e in &self.by_first[usize::from(t.joined[at].letter)] {
-                let e = &self.entries[usize::from(e)];
+                let e = &self.entries[e];
                 if e.kind == Kind::Spread
                     && fits(&e.runs, &t.joined[at..], false)
                     && t.spans_words(w, e.runs.len())
@@ -197,14 +197,50 @@ impl Filter {
         false
     }
 
-    fn is_allowed(&self, word: &[Run]) -> bool {
-        self.allowed.iter().any(|(a, prefix)| {
-            if *prefix {
-                // A prefix: its last run may be part of a longer one.
-                word.len() >= a.len() && fits(a, word, false)
-            } else {
-                fits(a, word, true)
+    /// Whether one word holds a slur, after what the allow entries excuse. Allow entries and
+    /// whole-word blocks are tied to the word as it was written, from its first run to its last.
+    fn word_hits(&self, word: &[Run]) -> bool {
+        // A whole word that is allowed is excused, whatever a prefix would leave of it.
+        if self
+            .allowed
+            .iter()
+            .any(|(a, prefix)| !*prefix && fits(a, word, true))
+        {
+            return false;
+        }
+        // The longest allowed prefix that starts the word covers the most: what it leaves is
+        // scanned once, and text a shorter prefix would leave but this one covers is not flagged.
+        let longest = self
+            .allowed
+            .iter()
+            .filter(|(a, prefix)| *prefix && fits(a, word, false))
+            .map(|(a, _)| a.len())
+            .max();
+        if let Some(covered) = longest {
+            // It excuses what it matches, with every repeat of its last letter. What is left is
+            // scanned for blocked words inside it: a whole-word block never matches it (it is
+            // part of a longer word), and no allow entry applies to it (it is no word of its own).
+            return self.embedded_hit(&word[covered..]);
+        }
+        for at in 0..word.len() {
+            for &e in &self.by_first[usize::from(word[at].letter)] {
+                let e = &self.entries[e];
+                let whole = e.kind == Kind::Whole;
+                if (!whole || at == 0) && fits(&e.runs, &word[at..], whole) {
+                    return true;
+                }
             }
+        }
+        false
+    }
+
+    /// Whether `runs`, the end of a longer word, hold a blocked word inside them.
+    fn embedded_hit(&self, runs: &[Run]) -> bool {
+        (0..runs.len()).any(|at| {
+            self.by_first[usize::from(runs[at].letter)]
+                .iter()
+                .map(|&e| &self.entries[e])
+                .any(|e| e.kind != Kind::Whole && fits(&e.runs, &runs[at..], false))
         })
     }
 }
@@ -221,49 +257,59 @@ fn fits(entry: &[Run], runs: &[Run], whole: bool) -> bool {
         .all(|(e, r)| e.letter == r.letter && r.count >= e.count)
 }
 
-/// What a hit leads to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action {
-    /// The text is refused, nothing more.
-    Refused,
-    /// Refused, and the player can't chat until then (epoch milliseconds).
-    Muted { until: i64 },
-    /// Refused, and the player is banned until then.
-    Banned { until: i64 },
+/// A mute as the mutes file keeps it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct SavedMute {
+    uuid: String,
+    name: String,
+    until: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
 
-impl Action {
-    pub fn name(self) -> &'static str {
-        match self {
-            Action::Refused => "refused",
-            Action::Muted { .. } => "muted",
-            Action::Banned { .. } => "banned",
+impl From<SavedMute> for Mute {
+    fn from(m: SavedMute) -> Self {
+        let SavedMute {
+            uuid,
+            name,
+            until,
+            by,
+            reason,
+        } = m;
+        Mute {
+            uuid,
+            name,
+            until,
+            by,
+            reason,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Mute {
-    pub uuid: String,
-    pub name: String,
-    /// Epoch milliseconds; `None`: until `/unmute`.
-    pub until: Option<i64>,
-    /// The operator who muted them (`/mute`, `/tempmute`); `None`: the filter.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub by: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-impl Mute {
-    pub fn active(&self, now: i64) -> bool {
-        self.until.is_none_or(|until| until > now)
+impl From<Mute> for SavedMute {
+    fn from(m: Mute) -> Self {
+        let Mute {
+            uuid,
+            name,
+            until,
+            by,
+            reason,
+        } = m;
+        SavedMute {
+            uuid,
+            name,
+            until,
+            by,
+            reason,
+        }
     }
 }
 
 #[derive(Default, Serialize, Deserialize)]
 struct MutesFile {
-    mutes: Vec<Mute>,
+    mutes: Vec<SavedMute>,
 }
 
 /// One player's hits: how many, and when the last one stops counting.
@@ -293,7 +339,7 @@ impl Guard {
         {
             for m in saved.mutes {
                 if let Some(uuid) = parse_uuid(&m.uuid) {
-                    mutes.insert(uuid, m);
+                    mutes.insert(uuid, m.into());
                 }
             }
         }
@@ -431,7 +477,7 @@ impl Guard {
         };
         let now = now_millis();
         self.mutes.retain(|_, m| m.active(now));
-        let mut mutes: Vec<Mute> = self.mutes.values().cloned().collect();
+        let mut mutes: Vec<SavedMute> = self.mutes.values().cloned().map(Into::into).collect();
         mutes.sort_by(|a, b| a.name.cmp(&b.name));
         if let Ok(text) = serde_json::to_string_pretty(&MutesFile { mutes }) {
             let tmp = file.with_extension("json.tmp");
@@ -440,6 +486,121 @@ impl Guard {
             }
         }
     }
+}
+
+impl ChatGuard for Guard {
+    fn matches(&self, text: &str) -> bool {
+        self.filter.matches(text)
+    }
+
+    fn muted(&self, uuid: u128, now: i64) -> Option<&Mute> {
+        Guard::muted(self, uuid, now)
+    }
+
+    fn mutes(&self, now: i64) -> Vec<&Mute> {
+        Guard::mutes(self, now)
+    }
+
+    fn mute(
+        &mut self,
+        uuid: u128,
+        name: &str,
+        until: Option<i64>,
+        by: &str,
+        reason: Option<String>,
+    ) {
+        Guard::mute(self, uuid, name, until, by, reason);
+    }
+
+    fn strike(&mut self, uuid: u128, name: &str, now: i64) -> (u32, Action) {
+        Guard::strike(self, uuid, name, now)
+    }
+
+    fn unmute(&mut self, name: &str) -> Option<String> {
+        Guard::unmute(self, name)
+    }
+
+    fn log(
+        &mut self,
+        now: i64,
+        name: &str,
+        uuid: u128,
+        place: Place,
+        count: u32,
+        action: Action,
+        text: &str,
+    ) -> Result<(), String> {
+        let path = &self.config.log;
+        if path.is_empty() {
+            return Ok(());
+        }
+        let line = log_line(now, name, uuid, place.name(), count, action, text);
+        append_log(Path::new(path), &line).map_err(|e| format!("{path}: {e}"))
+    }
+}
+
+/// `server.toml`'s `[chat_filter]` for the dedicated server ([`chat_guard::install`] it at startup): on
+/// by default, off (with an error logged) when the section is wrong. The mutes are kept in `dir`.
+pub fn load(server_toml: &str, dir: &Path) -> Loaded {
+    let mut loaded = Loaded::default();
+    let config = match Config::from_server_toml(server_toml) {
+        Ok(config) => config,
+        Err(e) => {
+            loaded.log.push((
+                "ERROR",
+                format!("server.toml: {e}; the chat filter stays off"),
+            ));
+            return loaded;
+        }
+    };
+    if !config.enabled {
+        return loaded;
+    }
+    let (guard, problem) = Guard::load(config, dir);
+    if let Some(problem) = problem {
+        loaded.log.push(("WARN", problem));
+    }
+    loaded.log.push((
+        "INFO",
+        format!(
+            "Chat filter on: {} words (server.toml [chat_filter]; enabled = false turns it off)",
+            guard.filter.len()
+        ),
+    ));
+    loaded.guard = Some(Box::new(guard));
+    loaded
+}
+
+/// Gives the dedicated server this chat filter.
+pub fn install() {
+    chat_guard::install(load);
+}
+
+/// How much of a refused text the log keeps: a chat line (256) whole, with room for a sign (4 lines)
+/// or a title; a book page is cut.
+const LOG_TEXT_CHARS: usize = 1024;
+/// A player name is 16 characters; the rest is cut.
+const LOG_NAME_CHARS: usize = 64;
+
+/// `text` on one line: every control and line-separator character (`\r`, U+0085, U+2028/2029...)
+/// becomes a space, so that a text can't start a log line of its own, and what is past `max`
+/// characters is cut, with a marker.
+fn one_line(text: &str, max: usize) -> String {
+    let mut out: String = text
+        .chars()
+        .take(max)
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    if text.chars().nth(max).is_some() {
+        out.push_str("...[cut]");
+    }
+    out
 }
 
 /// One line of `logs/chat-filter.log`, without its newline.
@@ -452,10 +613,8 @@ pub fn log_line(
     action: Action,
     text: &str,
 ) -> String {
-    let text: String = text
-        .chars()
-        .map(|c| if c == '\n' { ' ' } else { c })
-        .collect();
+    let text = one_line(text, LOG_TEXT_CHARS);
+    let name = one_line(name, LOG_NAME_CHARS);
     format!(
         "{} {name} {} {place} hit {count} {}: {text}",
         utc(now),

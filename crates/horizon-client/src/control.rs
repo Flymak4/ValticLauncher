@@ -10,6 +10,7 @@
 //! writes `{"transport":"tcp","port":N,"token":"..."}` to the path, readable
 //! only by its user; a client's first line must then be `auth TOKEN`.
 use crate::block_entity_render::StaticCacheFrameStats;
+use horizon_threads::alloc_count::{Counts, ON};
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},
@@ -20,6 +21,7 @@ use std::{
         mpsc,
     },
     thread,
+    time::Instant,
 };
 
 #[cfg(unix)]
@@ -285,8 +287,9 @@ impl Server {
                 move |stream: TcpStream| {
                     let _ = stream.set_nodelay(true);
                     let mut stream = Stream::Tcp(stream);
-                    authenticate(&mut stream, &token).then_some(stream)
+                    authenticate(&mut stream, &token, AUTH_TIMEOUT).then_some(stream)
                 },
+                MAX_UNAUTHENTICATED,
             )?;
         } else {
             #[cfg(unix)]
@@ -298,6 +301,8 @@ impl Server {
                     counted,
                     closed.clone(),
                     |s| Some(Stream::Unix(s)),
+                    // The socket's file permissions keep other users out and it takes no auth line.
+                    usize::MAX,
                 )?;
             }
         }
@@ -338,15 +343,24 @@ impl Server {
     }
 }
 
-/// Accept connections on a thread, one more thread per client.
+/// How long a TCP client has to send its `auth` line, in all.
+const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How many connections may wait on that line at once; more are closed unread, so a local process
+/// cannot pile up idle threads in the game.
+const MAX_UNAUTHENTICATED: usize = 8;
+
+/// Accept connections on a thread, one more thread per client. At most `max_pending` may be inside
+/// `accept` (still authenticating) at once.
 fn spawn_listener<S: Send + 'static>(
     mut accept_next: impl FnMut() -> io::Result<S> + Send + 'static,
     sender: mpsc::Sender<Request>,
     clients: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
     accept: impl Fn(S) -> Option<Stream> + Send + Sync + 'static,
+    max_pending: usize,
 ) -> io::Result<()> {
     let accept = std::sync::Arc::new(accept);
+    let pending = Arc::new(AtomicUsize::new(0));
     thread::Builder::new()
         .name("horizon-control".into())
         .spawn(move || {
@@ -359,29 +373,45 @@ fn spawn_listener<S: Send + 'static>(
                     thread::sleep(std::time::Duration::from_millis(10));
                     continue;
                 };
+                if pending.fetch_add(1, Ordering::AcqRel) >= max_pending {
+                    pending.fetch_sub(1, Ordering::AcqRel);
+                    continue;
+                }
                 let sender = sender.clone();
                 let accept = accept.clone();
                 let clients = clients.clone();
-                let _ = thread::Builder::new()
+                let counted = pending.clone();
+                let spawned = thread::Builder::new()
                     .name("horizon-control-client".into())
                     .spawn(move || {
-                        if let Some(stream) = accept(stream) {
+                        let accepted = accept(stream);
+                        counted.fetch_sub(1, Ordering::AcqRel);
+                        if let Some(stream) = accepted {
                             clients.fetch_add(1, Ordering::Relaxed);
                             serve(stream, &sender);
                             clients.fetch_sub(1, Ordering::Relaxed);
                         }
                     });
+                if spawned.is_err() {
+                    pending.fetch_sub(1, Ordering::AcqRel);
+                }
             }
         })?;
     Ok(())
 }
 
-/// The first line of a TCP client must be `auth TOKEN`.
-fn authenticate(stream: &mut Stream, token: &str) -> bool {
+/// The first line of a TCP client must be `auth TOKEN`, sent within `timeout` in all.
+fn authenticate(stream: &mut Stream, token: &str, timeout: std::time::Duration) -> bool {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
+    let deadline = std::time::Instant::now() + timeout;
     // Read the line byte by byte so nothing after it is buffered away.
     while line.len() < 256 {
+        // A deadline for the whole line, so a client sending a byte at a time cannot hold on.
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            return false;
+        }
         match stream.read(&mut byte) {
             Ok(1) if byte[0] == b'\n' => break,
             Ok(1) => line.push(byte[0]),
@@ -399,7 +429,8 @@ fn authenticate(stream: &mut Stream, token: &str) -> bool {
         r#"{"error":"bad or missing token: the first line must be auth TOKEN"}"#
     };
     let _ = writeln!(stream, "{reply}");
-    ok
+    // An authenticated client may idle between commands.
+    ok && stream.set_read_timeout(None).is_ok()
 }
 
 impl Drop for Server {
@@ -497,6 +528,105 @@ mod tests {
     }
 
     use super::*;
+    use std::time::Duration;
+
+    /// A listener on 127.0.0.1 as the game runs it, with the given auth timeout and cap.
+    fn silent_listener(timeout: Duration, max_pending: usize) -> u16 {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (sender, _requests) = mpsc::channel();
+        spawn_listener(
+            move || listener.accept().map(|(s, _)| s),
+            sender,
+            Arc::default(),
+            Arc::default(),
+            move |s: TcpStream| {
+                let mut stream = Stream::Tcp(s);
+                authenticate(&mut stream, "token", timeout).then_some(stream)
+            },
+            max_pending,
+        )
+        .unwrap();
+        port
+    }
+
+    /// Whether the game closed the connection (end of stream or reset), rather than the read timing out.
+    fn closed_by_game(client: &mut TcpStream) -> bool {
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client.read(&mut [0u8; 1]).map_or_else(
+            |e| {
+                !matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                )
+            },
+            |n| n == 0,
+        )
+    }
+
+    #[test]
+    fn a_connection_that_sends_nothing_is_closed_after_the_timeout() {
+        let port = silent_listener(Duration::from_millis(200), 8);
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let start = std::time::Instant::now();
+        assert!(closed_by_game(&mut client));
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_connection_that_drips_bytes_is_closed_at_the_deadline_of_the_whole_line() {
+        // A byte every 100 ms never leaves a 300 ms gap, and never ends the line: only a deadline for
+        // the whole line closes it (a fresh timeout per byte would hold it for the 3 s of dripping).
+        let port = silent_listener(Duration::from_millis(300), 8);
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let mut dripping = client.try_clone().unwrap();
+        let drip = std::thread::spawn(move || {
+            for _ in 0..30 {
+                if dripping.write_all(b"a").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let start = std::time::Instant::now();
+        assert!(closed_by_game(&mut client));
+        assert!(start.elapsed() < Duration::from_millis(1500));
+        drip.join().unwrap();
+    }
+
+    #[test]
+    fn connections_beyond_the_pending_cap_are_closed_at_once() {
+        // Two silent clients fill the cap; with a long timeout only the cap can close the third.
+        let port = silent_listener(Duration::from_secs(60), 2);
+        let _held: Vec<_> = (0..2)
+            .map(|_| TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap())
+            .collect();
+        let mut third = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        assert!(closed_by_game(&mut third));
+    }
+
+    #[test]
+    fn an_authenticated_client_may_idle_past_the_timeout() {
+        let port = silent_listener(Duration::from_millis(100), 8);
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        writeln!(client, "auth token").unwrap();
+        let mut reply = String::new();
+        BufReader::new(client.try_clone().unwrap())
+            .read_line(&mut reply)
+            .unwrap();
+        assert!(reply.contains("ok"));
+        std::thread::sleep(Duration::from_millis(400));
+        client
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let idle = client.read(&mut [0u8; 1]).unwrap_err();
+        assert!(matches!(
+            idle.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ));
+    }
 
     /// The check agrees with the system at every length around its limit.
     #[cfg(unix)]
@@ -519,6 +649,7 @@ mod tests {
 
     /// A `.json` endpoint is a file and TCP: the socket limit is not its limit.
     #[test]
+    #[ignore = "daily"]
     fn long_tcp_endpoint_opens() {
         let dir = std::env::temp_dir().join(format!("hz-long-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -530,6 +661,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn tcp_endpoint_round_trip() {
         let path =
             std::env::temp_dir().join(format!("horizon-ctl-test-{}.json", std::process::id()));
@@ -555,6 +687,7 @@ mod tests {
 
     /// A request past the limit is answered with an error and never reaches the game.
     #[test]
+    #[ignore = "daily"]
     fn a_request_longer_than_the_limit_is_refused() {
         let path =
             std::env::temp_dir().join(format!("horizon-ctl-long-{}.json", std::process::id()));
@@ -583,6 +716,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn tcp_refuses_a_wrong_token() {
         let path =
             std::env::temp_dir().join(format!("horizon-ctl-bad-{}.json", std::process::id()));
@@ -600,6 +734,22 @@ mod tests {
         assert_ne!(random_token(), random_token());
         assert_eq!(random_token().len(), 32);
         assert!(same_token("abc", "abc") && !same_token("abc", "abd") && !same_token("a", "ab"));
+    }
+
+    #[test]
+    fn the_series_cover_every_frame_the_summary_counts() {
+        let mut stats = FrameStats::default();
+        for ms in [4.0, 5.0, 6.0] {
+            stats.record(ms);
+            stats.record_cpu(ms / 2.0);
+        }
+        let mut summary = stats.summary();
+        assert!(summary.get("frame_ms").is_none());
+        stats.add_series(&mut summary);
+        assert_eq!(summary["frame_ms"], serde_json::json!([4.0, 5.0, 6.0]));
+        assert_eq!(summary["cpu_ms"], serde_json::json!([2.0, 2.5, 3.0]));
+        assert_eq!(summary["gpu_ms"], serde_json::json!([]));
+        assert_eq!(summary["frames"], 3);
     }
 
     #[test]
@@ -625,6 +775,67 @@ mod tests {
         assert_eq!(summary["static_entities_drawn_avg_per_frame"], 4.0);
         assert_eq!(summary["dynamic_entities_drawn_avg_per_frame"], 3.0);
     }
+
+    fn counts(allocs: u64, bytes: u64, frees: u64, freed: u64) -> Counts {
+        Counts {
+            allocs,
+            bytes,
+            frees,
+            freed,
+        }
+    }
+
+    #[test]
+    fn allocations_are_summarized_per_frame_and_per_second() {
+        let mut stats = FrameStats::default();
+        let start = Instant::now();
+        for (i, a) in [100u64, 200, 300, 400, 1000].into_iter().enumerate() {
+            // Window: 10 blocks kept; process: twice the blocks, 1 MiB per 100, 20 blocks and 1 MiB kept.
+            let window = counts(a, a * 1024, a - 10, 0);
+            let all = counts(
+                2 * a,
+                (2 * a / 100) << 20,
+                2 * a - 20,
+                ((2 * a / 100) - 1) << 20,
+            );
+            stats.record_allocs(window, all, start + Duration::from_millis(100 * i as u64));
+        }
+        let alloc = stats.alloc_summary();
+        let window = &alloc["window_thread"];
+        assert_eq!(window["allocs_per_frame"]["avg"], 400.0);
+        assert_eq!(window["allocs_per_frame"]["p50"], 300.0);
+        assert_eq!(window["allocs_per_frame"]["p95"], 1000.0);
+        assert_eq!(window["allocs_per_frame"]["max"], 1000.0);
+        assert_eq!(window["kib_per_frame"]["p50"], 300.0);
+        assert_eq!(window["frees_per_frame_avg"], 390.0);
+        // The first frame only starts the clock: the rates cover the four after it, 0.4 s.
+        let process = &alloc["process"];
+        assert_eq!(process["allocs_per_s"], 9500.0);
+        assert_eq!(process["frees_per_s"], 9300.0);
+        assert_eq!(process["mib_per_s"], 95.0);
+        assert_eq!(process["net_mib"], 4.0);
+        assert_eq!(stats.alloc_counts(), [100, 200, 300, 400, 1000]);
+    }
+
+    #[test]
+    fn one_frame_has_counts_but_no_rate() {
+        let mut stats = FrameStats::default();
+        stats.record_allocs(counts(5, 64, 5, 64), counts(9, 99, 9, 99), Instant::now());
+        let alloc = stats.alloc_summary();
+        assert_eq!(alloc["window_thread"]["allocs_per_frame"]["max"], 5.0);
+        assert!(alloc["process"]["allocs_per_s"].is_null());
+        assert!(FrameStats::default().alloc_summary().is_null());
+    }
+
+    #[test]
+    fn the_summary_has_alloc_only_when_the_game_counts() {
+        let mut stats = FrameStats::default();
+        stats.record(10.0);
+        stats.record_allocs(counts(5, 64, 5, 64), Counts::default(), Instant::now());
+        assert_eq!(stats.summary()["alloc"].is_null(), !ON);
+        stats.reset();
+        assert!(stats.alloc_counts().is_empty() && stats.alloc_summary().is_null());
+    }
 }
 
 /// Frame durations since the last reset, summarized like the Java recorder,
@@ -641,6 +852,15 @@ pub struct FrameStats {
     static_bytes_uploaded: u64,
     static_entities_drawn: u64,
     dynamic_entities_drawn: u64,
+    /// Window-thread allocations and bytes of each rendered frame (`alloc-count` builds).
+    allocs: Vec<u32>,
+    alloc_bytes: Vec<u64>,
+    /// Window-thread frees summed over the frames in `allocs`.
+    alloc_frees: u64,
+    /// When the first and the last frame since the reset were recorded.
+    alloc_span: Option<(Instant, Instant)>,
+    /// All threads' counts over the frames after the first, the time base of the rates.
+    alloc_process: Counts,
 }
 
 /// The parts of a frame's CPU time: world streaming and uploads, game ticks,
@@ -717,17 +937,77 @@ impl FrameStats {
         self.static_entities_drawn += stats.static_entities_drawn;
         self.dynamic_entities_drawn += stats.dynamic_entities_drawn;
     }
-    /// Every recorded frame time, in milliseconds, in order.
-    pub fn frame_millis(&self) -> &[f32] {
-        &self.millis
+    /// Adds every frame's time (`frame_ms`, `cpu_ms`, `gpu_ms`) to a summary.
+    pub fn add_series(&self, summary: &mut serde_json::Value) {
+        summary["frame_ms"] = self.millis.clone().into();
+        summary["cpu_ms"] = self.cpu.clone().into();
+        summary["gpu_ms"] = self.gpu.clone().into();
     }
-    /// CPU time of every recorded frame, in milliseconds.
-    pub fn cpu_millis(&self) -> &[f32] {
-        &self.cpu
+    /// One frame's allocations: this thread's since the last frame, all threads' since then.
+    pub fn record_allocs(&mut self, window: Counts, process: Counts, now: Instant) {
+        if self.allocs.len() < Self::LIMIT {
+            self.allocs
+                .push(u32::try_from(window.allocs).unwrap_or(u32::MAX));
+            self.alloc_bytes.push(window.bytes);
+            self.alloc_frees += window.frees;
+        }
+        match &mut self.alloc_span {
+            None => self.alloc_span = Some((now, now)),
+            Some((_, last)) => {
+                *last = now;
+                let sum = &mut self.alloc_process;
+                sum.allocs += process.allocs;
+                sum.bytes += process.bytes;
+                sum.frees += process.frees;
+                sum.freed += process.freed;
+            }
+        }
     }
-    /// GPU time of every frame the GPU timed, in milliseconds.
-    pub fn gpu_millis(&self) -> &[f32] {
-        &self.gpu
+    /// Window-thread allocations of every recorded frame, in order.
+    pub fn alloc_counts(&self) -> &[u32] {
+        &self.allocs
+    }
+    /// Window-thread bytes allocated in every recorded frame, in order.
+    pub fn alloc_bytes(&self) -> &[u64] {
+        &self.alloc_bytes
+    }
+    /// The `alloc` object of [`summary`](Self::summary), `null` before a frame was recorded.
+    fn alloc_summary(&self) -> serde_json::Value {
+        let n = self.allocs.len();
+        if n == 0 {
+            return serde_json::Value::Null;
+        }
+        let round = |v: f64| (v * 10.0).round() / 10.0;
+        let stats = |mut values: Vec<f64>| {
+            values.sort_by(f64::total_cmp);
+            let pick = |p: f64| values[((n as f64 * p).ceil() as usize).clamp(1, n) - 1];
+            serde_json::json!({
+                "avg": round(values.iter().sum::<f64>() / n as f64),
+                "p50": round(pick(0.5)),
+                "p95": round(pick(0.95)),
+                "max": round(values[n - 1]),
+            })
+        };
+        let per_second =
+            |amount: u64, seconds: f64| (seconds > 0.0).then(|| round(amount as f64 / seconds));
+        let seconds = self.alloc_span.map_or(0.0, |(first, last)| {
+            last.duration_since(first).as_secs_f64()
+        });
+        let mib = |bytes: u64| bytes as f64 / 1048576.0;
+        let process = &self.alloc_process;
+        serde_json::json!({
+            "window_thread": {
+                "allocs_per_frame": stats(self.allocs.iter().map(|&a| f64::from(a)).collect()),
+                "kib_per_frame": stats(self.alloc_bytes.iter().map(|&b| b as f64 / 1024.0).collect()),
+                "frees_per_frame_avg": round(self.alloc_frees as f64 / n as f64),
+            },
+            "process": {
+                "allocs_per_s": per_second(process.allocs, seconds),
+                "mib_per_s": (seconds > 0.0).then(|| round(mib(process.bytes) / seconds)),
+                "frees_per_s": per_second(process.frees, seconds),
+                "net_mib": round(mib(process.bytes) - mib(process.freed)),
+            },
+        })
     }
     pub fn reset(&mut self) {
         self.millis.clear();
@@ -739,6 +1019,11 @@ impl FrameStats {
         self.static_bytes_uploaded = 0;
         self.static_entities_drawn = 0;
         self.dynamic_entities_drawn = 0;
+        self.allocs.clear();
+        self.alloc_bytes.clear();
+        self.alloc_frees = 0;
+        self.alloc_span = None;
+        self.alloc_process = Counts::default();
     }
     pub fn summary(&self) -> serde_json::Value {
         let mut sorted = self.millis.clone();
@@ -789,6 +1074,7 @@ impl FrameStats {
             "dynamic_entities_drawn": self.dynamic_entities_drawn,
             "static_entities_drawn_avg_per_frame": self.static_entities_drawn as f64 / n as f64,
             "dynamic_entities_drawn_avg_per_frame": self.dynamic_entities_drawn as f64 / n as f64,
+            "alloc": if ON { self.alloc_summary() } else { serde_json::Value::Null },
         })
     }
 }

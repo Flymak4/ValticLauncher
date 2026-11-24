@@ -434,6 +434,12 @@ fn split_url(url: &str) -> Option<(String, u16, String)> {
     ))
 }
 
+/// How long a router has for its whole HTTP answer.
+const HTTP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Gateways tried from one discovery: anyone on the LAN can answer SSDP, each with its own.
+const MAX_GATEWAYS: usize = 8;
+
 /// A tiny HTTP/1.1 client (Connection: close; Content-Length, chunked or
 /// to the end).
 fn http(
@@ -441,6 +447,16 @@ fn http(
     url: &str,
     headers: &[(&str, &str)],
     body: &str,
+) -> io::Result<(u16, String)> {
+    http_within(method, url, headers, body, HTTP_DEADLINE)
+}
+
+fn http_within(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+    within: Duration,
 ) -> io::Result<(u16, String)> {
     let (host, port, path) = split_url(url).ok_or_else(|| io::Error::other("bad URL"))?;
     let addr = (host.as_str(), port)
@@ -459,8 +475,39 @@ fn http(
     req.push_str("\r\n");
     req.push_str(body);
     s.write_all(req.as_bytes())?;
+    // One deadline for the whole answer: a per-read timeout alone let a device sending a byte every
+    // few seconds hold the request (and the lock or the stop waiting on it) for weeks.
+    let deadline = Instant::now() + within;
     let mut raw = Vec::new();
-    s.take(1 << 20).read_to_end(&mut raw)?;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "router too slow"))?;
+        s.set_read_timeout(Some(left.min(Duration::from_secs(5))))?;
+        // A read that times out at the deadline is the router being too slow, whatever kind the
+        // platform reports it as (Linux: WouldBlock).
+        let n = match s.read(&mut chunk) {
+            Ok(n) => n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "router too slow"));
+            }
+            Err(e) => return Err(e),
+        };
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&chunk[..n]);
+        if raw.len() > 1 << 20 {
+            return Err(io::Error::other("router answer too big"));
+        }
+    }
     let text = String::from_utf8_lossy(&raw).into_owned();
     let (head, rest) = text
         .split_once("\r\n\r\n")
@@ -487,11 +534,16 @@ fn dechunk(mut s: &str) -> String {
         let Ok(n) = usize::from_str_radix(size.split(';').next().unwrap_or("").trim(), 16) else {
             break;
         };
-        if n == 0 || rest.len() < n {
+        // `n` is the device's byte count: a chunk ending inside a character (the text went through
+        // `from_utf8_lossy`) or past the end stops here rather than panicking.
+        let (Some(chunk), Some(next)) = (rest.get(..n), rest.get(n..)) else {
+            break;
+        };
+        if n == 0 {
             break;
         }
-        out.push_str(&rest[..n]);
-        s = rest[n..].trim_start_matches("\r\n");
+        out.push_str(chunk);
+        s = next.trim_start_matches("\r\n");
     }
     out
 }
@@ -536,14 +588,41 @@ pub fn ssdp_discover(timeout: Duration) -> Vec<String> {
     let mut found = Vec::new();
     let mut buf = [0u8; 2048];
     while Instant::now() < deadline {
-        if let Ok((n, _)) = s.recv_from(&mut buf)
+        if let Ok((n, from)) = s.recv_from(&mut buf)
             && let Some(l) = ssdp_location(&String::from_utf8_lossy(&buf[..n]))
+            && lan_location(&l, from.ip())
             && !found.contains(&l)
+            && found.len() < MAX_GATEWAYS
         {
             found.push(l);
         }
     }
     found
+}
+/// Whether an SSDP answer's `location` may be fetched: it names, by address, the LAN device
+/// that sent the answer. Anyone on the LAN can answer SSDP, and the location would otherwise
+/// let them aim this machine's requests at any host or at its own loopback services.
+pub fn lan_location(location: &str, from: IpAddr) -> bool {
+    let Some((host, _, _)) = split_url(location) else {
+        return false;
+    };
+    let Ok(host) = host.parse::<IpAddr>() else {
+        return false;
+    };
+    let (host, from) = (host.to_canonical(), from.to_canonical());
+    host == from
+        && match host {
+            IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+            // Unique local (fc00::/7) or link-local (fe80::/10).
+            IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
+        }
+}
+/// Whether two URLs name the same host.
+fn same_host(a: &str, b: &str) -> bool {
+    match (split_url(a), split_url(b)) {
+        (Some((a, _, _)), Some((b, _, _))) => a.eq_ignore_ascii_case(&b),
+        _ => false,
+    }
 }
 pub fn ssdp_location(response: &str) -> Option<String> {
     response.lines().find_map(|l| {
@@ -610,6 +689,10 @@ impl Igd {
             } else {
                 format!("{base}/{}", control.trim_start_matches('/'))
             };
+            // Control requests go only to the device that described itself, whatever it says.
+            if !same_host(&control, location) {
+                continue;
+            }
             return Ok(Self {
                 control,
                 service: service.to_owned(),
@@ -703,8 +786,12 @@ pub fn default_gateway() -> Option<Ipv4Addr> {
     }
     #[cfg(windows)]
     {
+        // A program without a console of its own (the launcher) opens none for `route`.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let out = std::process::Command::new("route")
             .args(["print", "-4", "0.0.0.0"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()?;
         windows_gateway(&String::from_utf8_lossy(&out.stdout))
@@ -750,6 +837,36 @@ pub fn windows_gateway(text: &str) -> Option<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chunk_ending_inside_a_character_stops_the_body() {
+        // "é" is two bytes: a one-byte chunk ends inside it.
+        assert_eq!(dechunk("2\r\nab\r\n1\r\né\r\n0\r\n\r\n"), "ab");
+        assert_eq!(dechunk("2\r\nab\r\n9\r\nshort"), "ab");
+        assert_eq!(dechunk("3\r\nabc\r\n2\r\né\r\n0\r\n\r\n"), "abcé");
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_router_trickling_its_answer_runs_out_of_time() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/desc.xml", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let _ = s.read(&mut [0; 1024]);
+            // Each byte well within the per-read timeout.
+            for b in b"HTTP/1.1 200 OK\r\n\r\n".iter().cycle().take(200) {
+                if s.write_all(&[*b]).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let started = Instant::now();
+        let err = http_within("GET", &url, &[], "", Duration::from_millis(300)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
     use std::{
         collections::HashMap,
         net::TcpListener,
@@ -817,6 +934,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn pcp_maps_renews_and_deletes() {
         let (gw, table) = mock_pmp(false);
         let targets = Targets {
@@ -834,6 +952,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_router_that_grants_no_lifetime_maps_nothing() {
         // Success, the nonce and a port, but a lifetime of 0, for PCP and NAT-PMP alike.
         let s = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -886,6 +1005,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn nat_pmp_when_pcp_is_unsupported() {
         let (gw, table) = mock_pmp(true);
         let targets = Targets {
@@ -969,6 +1089,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn upnp_maps_and_deletes() {
         let (location, table) = mock_igd(false, 0);
         let targets = Targets {
@@ -989,6 +1110,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn upnp_permanent_leases_and_taken_ports() {
         let (location, table) = mock_igd(true, 25580);
         let targets = Targets {
@@ -1005,6 +1127,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn nothing_answering_says_why() {
         let quiet = UdpSocket::bind("127.0.0.1:0").unwrap();
         let targets = Targets {
@@ -1017,6 +1140,70 @@ mod tests {
             map(&Targets::default(), Ipv4Addr::LOCALHOST, 1, LEASE).unwrap_err(),
             "no router answered"
         );
+    }
+
+    /// Answers one request with `body`; returns its URL and what it received.
+    fn one_shot(body: String) -> (u16, std::sync::mpsc::Receiver<String>) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut s, _)) = l.accept() else { return };
+            let mut buf = [0u8; 4096];
+            let n = s.read(&mut buf).unwrap_or(0);
+            let _ = tx.send(String::from_utf8_lossy(&buf[..n]).into_owned());
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        });
+        (port, rx)
+    }
+
+    /// A description that sends the control requests to another host than the one that answered.
+    fn description(base: &str, control: &str) -> String {
+        format!(
+            "<root>{base}<device><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>{control}</controlURL></service></serviceList></device></root>"
+        )
+    }
+
+    #[test]
+    fn a_description_cannot_send_requests_to_another_host() {
+        // "127.1" is the same machine as "127.0.0.1" under another name.
+        for (base, control) in [
+            ("<URLBase>http://127.1:{victim}</URLBase>", "/ctl"),
+            ("", "http://127.1:{victim}/ctl"),
+        ] {
+            let (victim, seen) = one_shot(String::new());
+            let fill = |t: &str| t.replace("{victim}", &victim.to_string());
+            let (port, _) = one_shot(description(&fill(base), &fill(control)));
+            let igd = Igd::from_location(&format!("http://127.0.0.1:{port}/desc.xml"));
+            assert!(igd.is_err(), "a service on another host was accepted");
+            assert!(
+                seen.recv_timeout(Duration::from_millis(200)).is_err(),
+                "a request reached another host"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_answering_lan_device_is_a_gateway_location() {
+        let ip = |s: &str| -> IpAddr { s.parse().unwrap() };
+        let ok = |url: &str, from: &str| lan_location(url, ip(from));
+        assert!(ok("http://192.168.1.1:5000/d.xml", "192.168.1.1"));
+        assert!(ok("http://10.0.0.1/d.xml", "10.0.0.1"));
+        assert!(ok("http://169.254.1.1/d.xml", "169.254.1.1"));
+        assert!(ok("http://[fd00::1]:80/d.xml", "fd00::1"));
+        assert!(ok("http://[fe80::1]/d.xml", "fe80::1"));
+        // Another host than the sender, loopback, public and named hosts.
+        assert!(!ok("http://192.168.1.99/d.xml", "192.168.1.1"));
+        assert!(!ok("http://127.0.0.1:8080/d.xml", "192.168.1.1"));
+        assert!(!ok("http://127.0.0.1:8080/d.xml", "127.0.0.1"));
+        assert!(!ok("http://[::1]/d.xml", "::1"));
+        assert!(!ok("http://203.0.113.5/d.xml", "203.0.113.5"));
+        assert!(!ok("http://router.lan/d.xml", "192.168.1.1"));
+        assert!(!ok("https://192.168.1.1/d.xml", "192.168.1.1"));
     }
 
     #[test]

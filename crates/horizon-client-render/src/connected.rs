@@ -5,6 +5,7 @@
 //!
 //! The rules and the tile geometry are `horizon_optifine::ctm`'s.
 
+use crate::resource_source::ResourceSource;
 use crate::sprites::Sprites;
 use horizon_optifine::ctm::{
     self, Connect, Method, Orient, Rule, Tile,
@@ -12,7 +13,7 @@ use horizon_optifine::ctm::{
 };
 use horizon_world::block_state_properties::BlockProperties;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
 
 /// A tile as the mesher draws it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,16 +57,22 @@ pub struct Overlay {
 struct LoadedRule {
     rule: Rule,
     tiles: Vec<TileLayer>,
+    /// By tile: the rules whose `matchTiles` name it (a range of `lists`), which chain on it.
+    chain: Vec<(u32, u32)>,
     overlay: OverlayJoin,
 }
 
-/// What an overlay rule joins: `connectBlocks` as state ids and `connectTiles` as sprite
-/// layers (sorted), and its tint.
+/// What a rule joins in place of `connect`: an overlay's `connectBlocks` as state ids and
+/// `connectTiles` as sprite layers (sorted), and its tint; or another method's
+/// `horizon.connectBlocks` as state ids.
 #[derive(Default)]
 struct OverlayJoin {
     states: Vec<u32>,
     tiles: Vec<u16>,
     tint: Option<(i32, Option<u32>)>,
+    /// `horizon.connectBlocks` is set: its list replaces `connect` even when none of the
+    /// blocks it names is loaded (then the rule joins nothing).
+    listed: bool,
 }
 
 impl OverlayJoin {
@@ -127,17 +134,17 @@ impl ConnectedTextures {
     /// The sprites `rules` match by name (`matchTiles`, `connectTiles`), for
     /// [`Sprites::keep_apart`]: before the models insert theirs.
     pub fn matched_sprites(rules: &[Rule]) -> Vec<String> {
-        (rules.iter())
+        rules
+            .iter()
             .flat_map(|r| r.match_tiles.iter().chain(&r.connect_tiles))
             .map(|t| sprite_name(t))
             .collect()
     }
 
-    /// `rules` (`ctm::load` under `root`), with their tiles inserted into `sprites` (before it
-    /// finishes). `face_layer` answers a block state's sprite on a side, for rules that connect
-    /// by tile.
+    /// Loaded rules with their tiles inserted into `sprites` (before it finishes).
+    /// `face_layer` answers a block state's sprite on a side, for rules that connect by tile.
     pub fn load(
-        root: &Path,
+        _root: &ResourceSource,
         mut rules: Vec<Rule>,
         registry: &BlockRegistry,
         sprites: &mut Sprites,
@@ -160,7 +167,7 @@ impl ConnectedTextures {
                 _ => None,
             })
             .collect();
-        sprites.prefetch(root, tiles.iter().map(String::as_str));
+        sprites.prefetch(tiles.iter().map(String::as_str));
         let loaded = rules
             .into_iter()
             .filter_map(|rule| {
@@ -173,8 +180,8 @@ impl ConnectedTextures {
                         Tile::Texture(path) => {
                             // A tile among the textures is that sprite, under its own name.
                             let layer = match sprite_name(path) {
-                                name if name != *path => sprites.insert(root, &name)?,
-                                _ => sprites.insert_file(root, path)?,
+                                name if name != *path => sprites.insert(&name)?,
+                                _ => sprites.insert_file(path)?,
                             };
                             Ok(TileLayer::Layer {
                                 layer: u16::try_from(layer)?,
@@ -188,6 +195,7 @@ impl ConnectedTextures {
                     Ok(tiles) => Some(LoadedRule {
                         rule,
                         tiles,
+                        chain: Vec::new(),
                         overlay: OverlayJoin::default(),
                     }),
                     Err(e) => {
@@ -247,31 +255,50 @@ impl ConnectedTextures {
             ..Self::default()
         };
         let states: Vec<_> = states.collect();
-        // Each block's states, for `connectBlocks` and `tintBlock`.
+        // Each block's states, for `connectBlocks`, `horizon.connectBlocks` and `tintBlock`.
         let mut block_states: HashMap<&str, Vec<u32>> = HashMap::new();
-        if out.rules.iter().any(|r| r.rule.method.is_overlay()) {
+        if out
+            .rules
+            .iter()
+            .any(|r| r.rule.method.is_overlay() || !r.rule.horizon_connect_blocks.is_empty())
+        {
             for (id, state) in states.iter().enumerate() {
                 if let Some((name, _)) = state {
                     block_states.entry(name).or_default().push(id as u32);
                 }
             }
         }
+        // The states `matches` names, sorted.
+        let resolve = |matches: &[horizon_optifine::BlockMatch]| {
+            let mut ids: Vec<u32> = Vec::new();
+            for m in matches {
+                let candidates = block_states
+                    .get(m.id.as_str())
+                    .map_or(&[][..], Vec::as_slice);
+                ids.extend(candidates.iter().filter(|&&id| {
+                    states[id as usize].is_some_and(|(name, props)| {
+                        m.matches(name, |k| props.get(k).map(String::as_str))
+                    })
+                }));
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
+        // Another method joins the blocks `horizon.connectBlocks` lists (parsed for those only).
+        for r in out
+            .rules
+            .iter_mut()
+            .filter(|r| !r.rule.horizon_connect_blocks.is_empty())
+        {
+            r.overlay.states = resolve(&r.rule.horizon_connect_blocks);
+            r.overlay.listed = true;
+        }
         for r in out.rules.iter_mut().filter(|r| r.rule.method.is_overlay()) {
             let rule = &r.rule;
             // `connectBlocks` and `connectTiles` are "only for method overlay".
             if rule.method == Method::Overlay {
-                for m in &rule.connect_blocks {
-                    let candidates = block_states
-                        .get(m.id.as_str())
-                        .map_or(&[][..], Vec::as_slice);
-                    r.overlay.states.extend(candidates.iter().filter(|&&id| {
-                        states[id as usize].is_some_and(|(name, props)| {
-                            m.matches(name, |k| props.get(k).map(String::as_str))
-                        })
-                    }));
-                }
-                r.overlay.states.sort_unstable();
-                r.overlay.states.dedup();
+                r.overlay.states = resolve(&rule.connect_blocks);
                 r.overlay.tiles = rule
                     .connect_tiles
                     .iter()
@@ -292,10 +319,23 @@ impl ConnectedTextures {
         let mut by_layer: Vec<Vec<u16>> = Vec::new();
         // Block rules by the block each entry names, so a state tests only its own.
         let mut by_block: HashMap<&str, Vec<u16>> = HashMap::new();
+        // Tile rules by the sprite or tile file each names, for chaining on a picked tile.
+        let mut by_name: HashMap<String, Vec<u16>> = HashMap::new();
         for (i, r) in out.rules.iter().enumerate() {
             let i = i as u16;
             for tile in &r.rule.match_tiles {
-                if let Some(l) = layer(&sprite_name(tile)) {
+                let name = sprite_name(tile);
+                let list = by_name.entry(name.clone()).or_default();
+                if list.last() != Some(&i) {
+                    list.push(i);
+                }
+                // A tile file (`./1.png`) is no model's sprite: only chaining reaches it, by
+                // name. By layer it would match every face whose sprite has the same pixels
+                // (identical stills share a layer: Conquest's blank placeholders, dozens).
+                if !name.contains(':') {
+                    continue;
+                }
+                if let Some(l) = layer(&name) {
                     let l = l as usize;
                     if by_layer.len() <= l {
                         by_layer.resize(l + 1, Vec::new());
@@ -316,6 +356,26 @@ impl ConnectedTextures {
             let range = push_list(&mut out.lists, &list);
             out.by_layer.push(range);
         }
+        let by_name: HashMap<String, (u32, u32)> = by_name
+            .into_iter()
+            .map(|(name, list)| (name, push_list(&mut out.lists, &list)))
+            .collect();
+        // Set at the end: `by_block` borrows the rules' names.
+        let chains: Vec<Vec<(u32, u32)>> = out
+            .rules
+            .iter()
+            .map(|r| {
+                r.rule
+                    .tiles
+                    .iter()
+                    .map(|t| match t {
+                        Tile::Texture(path) => by_name.get(&sprite_name(path)).copied(),
+                        _ => None,
+                    })
+                    .map(Option::unwrap_or_default)
+                    .collect()
+            })
+            .collect();
         let mut list = Vec::new();
         for state in states {
             let Some((name, props)) = state else {
@@ -355,6 +415,9 @@ impl ConnectedTextures {
             let range = push_list(&mut out.lists, &list);
             out.by_state.push(range);
         }
+        for (r, chain) in out.rules.iter_mut().zip(chains) {
+            r.chain = chain;
+        }
         out
     }
 
@@ -392,9 +455,11 @@ impl ConnectedTextures {
     }
 
     fn list(&self, ranges: &[(u32, u32)], i: usize) -> &[u16] {
-        ranges.get(i).map_or(&[], |&(start, len)| {
-            &self.lists[start as usize..(start + len) as usize]
-        })
+        ranges.get(i).map_or(&[], |&range| self.range(range))
+    }
+
+    fn range(&self, (start, len): (u32, u32)) -> &[u16] {
+        &self.lists[start as usize..(start + len) as usize]
     }
 
     /// What the `face` of the block `state` at `pos` draws, for a quad with sprite `layer`.
@@ -441,7 +506,7 @@ impl ConnectedTextures {
             let r = &self.rules[usize::from(i)];
             if (block || r.rule.match_blocks.is_empty())
                 && (tile || r.rule.match_tiles.is_empty())
-                && let Some(pick) = self.apply(
+                && let Some((pick, index)) = self.apply(
                     r,
                     state,
                     layer,
@@ -454,7 +519,7 @@ impl ConnectedTextures {
                 )
             {
                 // "Tiles output by CTM rules can also be matched by another rule": once, by the
-                // tile rules naming the picked tile (and this block, if they name blocks).
+                // tile rules naming the picked tile by name (and this block, if they name blocks).
                 // A tile on the face's own sprite (`tiles=stone`) is no new tile.
                 let Pick::Tile(TileLayer::Layer { layer: picked, .. }) = pick else {
                     return pick;
@@ -467,7 +532,7 @@ impl ConnectedTextures {
                 // again: an overlay would draw twice.
                 let first = self.list(&self.by_layer, layer as usize);
                 let again = self
-                    .list(&self.by_layer, picked as usize)
+                    .range(r.chain.get(index).copied().unwrap_or_default())
                     .iter()
                     .map(|&j| (j, &self.rules[usize::from(j)]))
                     .filter(|&(j, r)| {
@@ -488,8 +553,8 @@ impl ConnectedTextures {
                         &texture,
                         &mut overlay,
                     ) {
-                        Some(Pick::Keep) => return pick,
-                        Some(chained) => return chained,
+                        Some((Pick::Keep, _)) => return pick,
+                        Some((chained, _)) => return chained,
                         None => {}
                     }
                 }
@@ -512,7 +577,7 @@ impl ConnectedTextures {
         biome: &impl Fn() -> Option<&'b str>,
         texture: &impl Fn() -> Option<Axes>,
         overlay: &mut impl FnMut(Overlay),
-    ) -> Option<Pick> {
+    ) -> Option<(Pick, usize)> {
         let rule = &r.rule;
         // `Rule::applies_at`, with the biome looked up only for rules that test one. Rules with
         // a custom name are not loaded.
@@ -530,8 +595,9 @@ impl ConnectedTextures {
         let join = &r.overlay;
         let joins = |offset: [i32; 3]| {
             let other = neighbour(offset);
-            if join.any() {
-                // An overlay joins the blocks it is drawn beside.
+            if join.listed || join.any() {
+                // An overlay joins the blocks it is drawn beside; another method the blocks
+                // `horizon.connectBlocks` lists.
                 return join.states.binary_search(&other).is_ok()
                     || self
                         .face_layers
@@ -602,7 +668,7 @@ impl ConnectedTextures {
                         return if quarters.contains(&TileLayer::Skip) {
                             None
                         } else {
-                            Some(Pick::Quarters(quarters))
+                            Some((Pick::Quarters(quarters), 0))
                         };
                     }
                 }
@@ -617,7 +683,7 @@ impl ConnectedTextures {
                     return None;
                 }
                 if !joins([0, 1, 0]) {
-                    return Some(Pick::Keep);
+                    return Some((Pick::Keep, 0));
                 }
                 0
             }
@@ -644,8 +710,8 @@ impl ConnectedTextures {
         }
         match tile(index) {
             TileLayer::Skip => None,
-            TileLayer::Default => Some(Pick::Keep),
-            t => Some(Pick::Tile(t)),
+            TileLayer::Default => Some((Pick::Keep, index)),
+            t => Some((Pick::Tile(t), index)),
         }
     }
 }
@@ -675,6 +741,7 @@ mod tests {
             .enumerate()
             .map(|(n, rule)| LoadedRule {
                 overlay: OverlayJoin::default(),
+                chain: Vec::new(),
                 tiles: rule
                     .tiles
                     .iter()
@@ -722,6 +789,10 @@ mod tests {
                 "assets/minecraft/optifine/ctm/b0.png" => Some(2000),
                 // And `a0` of the first rule.
                 "assets/minecraft/optifine/ctm/a0.png" => Some(1000),
+                // Two blank placeholders with the same pixels, so one layer: the tile `grass/1`
+                // of the third rule (`chaining_follows_the_tile_not_its_pixels`).
+                "assets/minecraft/optifine/ctm/grass/1.png"
+                | "assets/minecraft/optifine/ctm/aaa/1.png" => Some(3000),
                 _ => None,
             },
         )
@@ -1121,6 +1192,40 @@ mod tests {
     }
 
     #[test]
+    fn horizon_connect_blocks_joins_listed_blocks() {
+        let west = |state| [([-1, 0, 0], state)];
+        // Plain ctm joins glass to glass only: stone to the west leaves tile 0.
+        let plain = world(&[("glass.properties", GLASS)]);
+        assert_eq!(pick_in(&plain, 1, 3, Face::North, &west(2)), tile(1000));
+        // horizon.connectBlocks joins the blocks it lists: glass and stone read as one wall.
+        let wall = world(&[(
+            "glass.properties",
+            "matchBlocks=glass\nmethod=ctm\ntiles=0-46\nhorizon.connectBlocks=glass stone",
+        )]);
+        assert_eq!(pick_in(&wall, 1, 3, Face::North, &west(2)), tile(1001));
+        assert_eq!(pick_in(&wall, 1, 3, Face::North, &west(1)), tile(1001));
+        // The list is the whole set: glass not listed doesn't join glass.
+        let only_stone = world(&[(
+            "glass.properties",
+            "matchBlocks=glass\nmethod=ctm\ntiles=0-46\nhorizon.connectBlocks=stone",
+        )]);
+        assert_eq!(
+            pick_in(&only_stone, 1, 3, Face::North, &west(1)),
+            tile(1000)
+        );
+        assert_eq!(
+            pick_in(&only_stone, 1, 3, Face::North, &west(2)),
+            tile(1001)
+        );
+        // A list naming only blocks that aren't loaded joins nothing, not `connect=block`.
+        let absent = world(&[(
+            "glass.properties",
+            "matchBlocks=glass\nmethod=ctm\ntiles=0-46\nhorizon.connectBlocks=nomod:frame",
+        )]);
+        assert_eq!(pick_in(&absent, 1, 3, Face::North, &west(1)), tile(1000));
+    }
+
+    #[test]
     fn overlay_methods_pick_like_their_own() {
         let ctm = world(&[
             (
@@ -1174,6 +1279,31 @@ mod tests {
             ),
         ]);
         assert_eq!(pick_in(&ctm, 1, 3, Face::Up, &[]), tile(2000));
+    }
+
+    #[test]
+    fn chaining_follows_the_tile_not_its_pixels() {
+        // Conquest's grass top: a placeholder tile that a rule beside it replaces. Another
+        // folder's placeholder has the same pixels, hence the same layer, and its rule sorts
+        // first; it must not draw on the grass.
+        let ctm = world(&[
+            (
+                "grass/top.properties",
+                "matchTiles=glass\nmethod=fixed\ntiles=1",
+            ),
+            (
+                "grass/random_1.properties",
+                "matchTiles=./1.png\nmethod=fixed\ntiles=17\nfaces=top",
+            ),
+            (
+                "aaa/random_1.properties",
+                "matchTiles=./1.png\nmethod=fixed\ntiles=5\nfaces=top",
+            ),
+        ]);
+        // Rules in path order: aaa/random_1 (1000), grass/random_1 (2000), grass/top (3000).
+        assert_eq!(pick_in(&ctm, 1, 3, Face::Up, &[]), tile(2000));
+        // A face whose own sprite has a placeholder's pixels is no placeholder.
+        assert_eq!(pick_in(&ctm, 2, 3000, Face::Up, &[]), Pick::Keep);
     }
 
     #[test]

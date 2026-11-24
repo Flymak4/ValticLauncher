@@ -58,6 +58,14 @@ impl<P: PositionalRandom, S: MaterialSurfaceQueries> MaterialSurfaceQueries
     ) -> Result<usize, DecodeError> {
         self.surface.bind_density(sampler, eager)
     }
+    fn bind_density_rows(
+        &mut self,
+        sampler: Arc<dyn horizon_core::density::DensitySampler>,
+        eager: bool,
+        rows: [i32; 2],
+    ) -> Result<usize, DecodeError> {
+        self.surface.bind_density_rows(sampler, eager, rows)
+    }
     fn density(&mut self, index: usize, position: BlockPos) -> Result<f32, MaterialRuleError> {
         self.surface.density(index, position)
     }
@@ -66,6 +74,9 @@ impl<P: PositionalRandom, S: MaterialSurfaceQueries> MaterialSurfaceQueries
     }
     fn possible_biomes(&self) -> Option<BTreeSet<String>> {
         self.surface.possible_biomes()
+    }
+    fn possible_biome_ids(&self) -> Option<&[u64]> {
+        self.surface.possible_biome_ids()
     }
     fn biome(&mut self, position: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         self.surface.biome(position)

@@ -8,13 +8,13 @@ use super::hub::{HostEvent, Hub, TickCtx};
 use crate::collisions::SceneCollisions;
 use horizon_anticheat::{Check, Config, Strikes};
 use horizon_core::geometry::{Aabb, Vec3};
-use horizon_world::nbt::{JavaString, Tag};
+use horizon_core::nbt::{JavaString, Tag};
 use std::{io::Write, time::Instant};
 
 pub struct Anticheat {
     pub config: Config,
-    /// `log`, opened at the first flag.
-    log: Option<std::fs::File>,
+    /// The thread writing `log`, started at the first flag: the tick only hands it the lines.
+    log: Option<LogWriter>,
     /// The players' kicks by check, read from `strikes` at the first kick.
     strikes: Option<Strikes>,
     /// When the previous server tick started, for the timer's balance.
@@ -38,19 +38,44 @@ impl Anticheat {
             return;
         }
         if self.log.is_none() {
-            let path = std::path::Path::new(&self.config.log);
+            let path = std::path::PathBuf::from(&self.config.log);
             if let Some(dir) = path.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            self.log = std::fs::OpenOptions::new()
+            let Ok(file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(path)
-                .ok();
+                .open(&path)
+            else {
+                return;
+            };
+            // A flood of flags (a lagging player, the load-test bots) wrote to the disk on the
+            // tick thread, one line at a time: the lines go to a writer thread instead, in order.
+            let (send, lines) = std::sync::mpsc::channel::<String>();
+            let Ok(thread) = std::thread::Builder::new()
+                .name("anticheat-log".into())
+                .spawn(move || {
+                    // The lines waiting are written together, flushed once none is left.
+                    let mut file = std::io::BufWriter::new(file);
+                    while let Ok(entry) = lines.recv() {
+                        let _ = file.write_all(entry.as_bytes());
+                        for entry in lines.try_iter() {
+                            let _ = file.write_all(entry.as_bytes());
+                        }
+                        let _ = file.flush();
+                    }
+                })
+            else {
+                return;
+            };
+            self.log = Some(LogWriter {
+                send: Some(send),
+                thread: Some(thread),
+            });
         }
-        if let Some(file) = &mut self.log {
+        if let Some(send) = self.log.as_ref().and_then(|log| log.send.as_ref()) {
             let time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-            let _ = writeln!(file, "[{time}] {line}");
+            let _ = send.send(format!("[{time}] {line}\n"));
         }
     }
 
@@ -75,6 +100,22 @@ impl Anticheat {
     }
 }
 
+/// The flag log's writer thread. Dropped with the anticheat (the server stopping), it closes the
+/// channel and waits for the thread to write every line handed to it, so none is lost.
+struct LogWriter {
+    send: Option<std::sync::mpsc::Sender<String>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for LogWriter {
+    fn drop(&mut self) {
+        self.send = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 /// A UUID as `banned-players.json` writes it.
 fn uuid_text(uuid: u128) -> String {
     let h = format!("{uuid:032x}");
@@ -90,6 +131,19 @@ fn uuid_text(uuid: u128) -> String {
 
 /// Server ticks a claim of the ground keeps its height after the ground last held the player.
 const GROUND_GRACE: u64 = 10;
+
+/// How `ground` refused a claim of the ground ([`Hub::anticheat_ground`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GroundRefusal {
+    /// Flagged and dropped.
+    Dropped,
+    /// Dropped without a flag: the same claim again, standing still where one was dropped. The move
+    /// counts toward vanilla's floating kick and the client is told the blocks under it, as for a
+    /// claim that stands.
+    Again,
+    /// Flagged, and the player kicked: the move is refused.
+    Kicked,
+}
 
 /// Whether an entity of `kind` at `at` may carry a player standing at `player`: the entities players
 /// stand on (boats, rafts, minecarts, shulkers, happy ghasts, 4 blocks tall), within 4 blocks sideways and
@@ -134,12 +188,12 @@ impl Hub {
         let restart = ac.tick_rate != tick_rate;
         ac.tick_rate = tick_rate;
         let ms = elapsed.map_or(0.0, |e| e.as_secs_f64() * 1000.0);
-        for g in &mut self.guests {
+        self.guests.update_all(|g| {
             if restart {
                 g.anticheat.timer.reset();
             }
             g.anticheat.timer.elapse(ms, &ac.config.timer);
-        }
+        });
     }
 
     /// ServerboundClientTickEndPacket: one client tick spent.
@@ -148,7 +202,7 @@ impl Hub {
             return;
         };
         if ac.config.runs(Check::Combat)
-            && let Some(foul) = self.guests[i].anticheat.attacks.tick_end()
+            && let Some(foul) = self.guests.update(i, |g| g.anticheat.attacks.tick_end())
         {
             self.combat_foul(i, foul, events);
         }
@@ -156,15 +210,32 @@ impl Hub {
             return;
         };
         if ac.config.runs(Check::Prediction) {
-            let g = &mut self.guests[i];
-            let (input, sprinting) = (g.input, g.client_sprinting);
-            g.record.get_or_insert_default().tick_end(input, sprinting);
+            let overdue = self.guests.update(i, |g| {
+                let (input, sprinting) = (g.input, g.client_sprinting);
+                let record = g.record.get_or_insert_default();
+                record.tick_end(input, sprinting);
+                record
+                    .overdue()
+                    .filter(|_| record.ended().is_multiple_of(20))
+            });
+            // A client that leaves the pings unanswered keeps the replay from knowing what it had
+            // seen: once a second while it does, that counts as a tick as far off as one can weigh.
+            if let Some(pings) = overdue {
+                let detail = format!("left the server's last {pings} pings unanswered");
+                self.flag(i, Check::Prediction, 5.0, &detail, events);
+            }
         }
+        let Some(ac) = self.anticheat.as_deref() else {
+            return;
+        };
         if !ac.config.runs(Check::Timer) {
             return;
         }
         let (rate, config) = (ac.tick_rate, &ac.config.timer);
-        if let Some(ahead) = self.guests[i].anticheat.timer.tick_end(rate, config) {
+        if let Some(ahead) = self
+            .guests
+            .update(i, |g| g.anticheat.timer.tick_end(rate, config))
+        {
             self.flag(
                 i,
                 Check::Timer,
@@ -189,7 +260,9 @@ impl Hub {
         if !ac.config.runs(Check::Combat) {
             return false;
         }
-        if let Some(foul) = self.guests[i].anticheat.attacks.attack(target)
+        if let Some(foul) = self
+            .guests
+            .update(i, |g| g.anticheat.attacks.attack(target))
             && self.combat_foul(i, foul, events)
         {
             return true;
@@ -199,16 +272,16 @@ impl Hub {
         };
         let setback = ac.config.combat.setback;
         setback > 0.0
-            && self.guests[i]
-                .anticheat
-                .vl(&ac.config, Check::Combat, self.ticks)
+            && self
+                .guests
+                .update(i, |g| g.anticheat.vl(&ac.config, Check::Combat, self.ticks))
                 >= setback
     }
 
     /// ServerboundPunchPacket: the arm swung, for `combat`.
     pub(super) fn anticheat_swing(&mut self, i: usize) {
         if self.anticheat.is_some() {
-            self.guests[i].anticheat.attacks.swing();
+            self.guests.update(i, |g| g.anticheat.attacks.swing());
         }
     }
 
@@ -230,76 +303,13 @@ impl Hub {
         self.flag(i, Check::Combat, 1.0, &detail, events)
     }
 
-    /// Whether the prediction records the players' client ticks.
-    pub fn recording(&self) -> bool {
-        self.anticheat
-            .as_deref()
-            .is_some_and(|ac| ac.config.runs(Check::Prediction))
-    }
-
-    /// A move packet from guest `i`, as it came: the prediction's record of the client tick.
-    pub(super) fn anticheat_moved(
-        &mut self,
-        i: usize,
-        pos: Option<[f64; 3]>,
-        rot: Option<(f32, f32)>,
-        flags: u8,
-    ) {
-        if self.recording() {
-            let record = self.guests[i].record.get_or_insert_default();
-            record.moved(pos, rot, flags);
-        }
-    }
-
-    /// ServerboundPongPacket: the client has handled every packet of the server tick `id` (the ping
-    /// [`Hub::anticheat_ping`] sent at its end).
-    pub(super) fn anticheat_pong(&mut self, i: usize, id: i32) {
-        let ticks = self.ticks;
-        if self.recording() {
-            let record = self.guests[i].record.get_or_insert_default();
-            // Ids are server ticks, cut to 32 bits.
-            record.pong(u64::from(id as u32), ticks);
-        }
-    }
-
-    /// The end of a server tick, after everything it sent: a ping whose id is the tick to each
-    /// player in the world, so the prediction knows from which client tick on that tick's packets
-    /// were in effect.
-    pub fn anticheat_ping(&mut self) {
-        if !self.recording() {
-            return;
-        }
-        // What the tick sent the players that changes their movement went out before this ping.
-        let ticks = self.ticks;
-        for g in &mut self.guests {
-            let changes = std::mem::take(
-                g.changes
-                    .get_mut()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            );
-            if let Some(record) = g.record.as_deref_mut() {
-                for change in changes {
-                    record.changed(ticks, change);
-                }
-            }
-        }
-        let ping = horizon_protocol::packets::play::Clientbound::Ping(
-            horizon_protocol::packets::configuration::Ping {
-                id: self.ticks as u32 as i32,
-            },
-        );
-        for g in self.guests.iter().filter(|g| g.placed) {
-            g.send(&ping);
-        }
-    }
-
     /// `ground`, for a move from guest `i` that says it ends on the ground at `to` (`stands`: the move
     /// itself was stopped by something below): None when the claim stands (or isn't judged, or the check
-    /// only logs: `setback = 0`), else whether the move is refused because the player was kicked. A
-    /// false claim is dropped (vanilla's fall damage follows); the player is never sent back, and the
-    /// move doesn't count toward vanilla's floating kick. A claim at the height where the
-    /// ground last held the player, within half a second, isn't judged: the block may have gone
-    /// server-side (broken, pushed) before the client heard.
+    /// only logs: `setback = 0`), else how it was refused. A false claim is dropped (vanilla's fall
+    /// damage follows); the player is never sent back, and the move doesn't count toward vanilla's
+    /// floating kick. A claim at the height where the ground last held the player, within half a
+    /// second, isn't judged: the block may have gone server-side (broken, pushed) before the client
+    /// heard.
     pub(super) fn anticheat_ground(
         &mut self,
         i: usize,
@@ -307,13 +317,16 @@ impl Hub {
         stands: bool,
         ctx: &TickCtx,
         events: &mut Vec<HostEvent>,
-    ) -> Option<bool> {
+    ) -> Option<GroundRefusal> {
         if !self.anticheat.as_deref()?.config.runs(Check::Ground) {
             return None;
         }
-        // Standing still: no fall to skip, whatever holds the player up (a block the server doesn't
-        // have, seen on the official server after a long teleport). Hovering is vanilla's floating kick.
-        if self.guests[i].position == to {
+        // Standing still where the server has the player at rest: no fall to skip, whatever holds the
+        // player up (a block the server doesn't have, seen on the official server after a long
+        // teleport). Hovering is vanilla's floating kick. A claim without a new position while the
+        // server has the player falling would end that fall: it is judged like any other.
+        let still = self.guests[i].position == to;
+        if still && !self.falling(i) {
             return None;
         }
         let ticks = self.ticks;
@@ -323,13 +336,20 @@ impl Hub {
         let from = self.guests[i].position;
         let held_at_start = || self.ground_holds(i, [from[0], to[1], from[2]], ctx) != Some(false);
         if stands || self.ground_holds(i, to, ctx)? || held_at_start() {
-            self.guests[i].anticheat.ground = Some((ticks, to[1]));
+            self.guests
+                .update(i, |g| g.anticheat.ground = Some((ticks, to[1])));
             return None;
         }
         if self.guests[i].anticheat.ground.is_some_and(|(t, y)| {
             ticks.saturating_sub(t) <= GROUND_GRACE && (y - to[1]).abs() < 1.0E-3
         }) {
             return None;
+        }
+        // The same claim again, standing still where one was dropped: dropped again, without a flag.
+        // A client on a block the server doesn't have sends one with every turn of its head.
+        if still && self.guests[i].anticheat.ground_refused == Some(to) {
+            let logs_only = self.anticheat.as_deref()?.config.ground.setback == 0.0;
+            return (!logs_only).then_some(GroundRefusal::Again);
         }
         let (fx, fz) = (to[0].floor() as i32, to[2].floor() as i32);
         let below = if self
@@ -351,7 +371,22 @@ impl Hub {
         // The correction is the dropped claim, never a setback: sent back into the air it claimed to
         // stand in, an honest player (on a block the server doesn't have) claims it again and again,
         // and hovers there until vanilla's floating kick. Only the anticheat's own kick ends it.
-        Some(!self.guests[i].left_reason.is_empty())
+        self.guests
+            .update(i, |g| g.anticheat.ground_refused = Some(to));
+        Some(if self.guests[i].left_reason.is_empty() {
+            GroundRefusal::Dropped
+        } else {
+            GroundRefusal::Kicked
+        })
+    }
+
+    /// Whether the server has guest `i` falling: its last accepted move did not end on the ground,
+    /// and its body has a fall distance or a move accepted this tick went down.
+    fn falling(&self, i: usize) -> bool {
+        let g = &self.guests[i];
+        !g.on_ground
+            && (g.motion.as_ref().is_some_and(|m| m.fall_distance > 0.0)
+                || g.moves.iter().any(|(moved, _)| moved[1] < 0.0))
     }
 
     /// Whether something at `to` can hold guest `i` up; None: not judged. Only blocks that can't hold
@@ -401,11 +436,13 @@ impl Hub {
             subject: None,
         };
         let down = Vec3::new(0.0, -0.1, 0.0);
-        Some(
-            scene
-                .resolve(feet, down, 0.0, false)
-                .is_ok_and(|done| done.y > down.y),
-        )
+        // A support probe — is the feet's 0.1 down blocked? — not an
+        // `Entity.move` (arismoko/horizon#2414): the gate is for moves, this asks the blocks.
+        #[allow(clippy::disallowed_methods)]
+        let held = scene
+            .resolve(feet, down, 0.0, false)
+            .is_ok_and(|done| done.y > down.y);
+        Some(held)
     }
 
     /// `check` failed for guest `i`: raise its level, log it, and act on it. Returns whether the move or
@@ -472,9 +509,13 @@ impl Hub {
         if !self.guests[i].left_reason.is_empty() {
             return true;
         }
-        let g = &mut self.guests[i];
-        let v = g.anticheat.flag(&ac.config, check, weight, ticks);
-        let (uuid, name) = (g.uuid, g.name.clone());
+        let (v, uuid, name) = self.guests.update(i, |g| {
+            (
+                g.anticheat.flag(&ac.config, check, weight, ticks),
+                g.uuid,
+                g.name.clone(),
+            )
+        });
         let ban_after = ac.config.actions(check).ban_after;
         let (kicks, ban) = if v.kick {
             ac.strike(uuid, check)
@@ -558,6 +599,66 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The log's lines reach the file in the order flagged, every one of them by the time the
+    /// anticheat is dropped (the server stopping), even a flood written just before.
+    #[test]
+    fn the_log_keeps_every_line_in_order_up_to_the_drop() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-anticheat-log-{}", std::process::id()));
+        let path = dir.join("logs").join("anticheat.log");
+        let mut anticheat = Anticheat::new(Config {
+            log: path.to_string_lossy().into_owned(),
+            ..Config::default()
+        });
+        for i in 0..20_000 {
+            anticheat.write_log(&format!("flag {i}"));
+        }
+        drop(anticheat);
+        let written = std::fs::read_to_string(&path).expect("the log was written");
+        let _ = std::fs::remove_dir_all(&dir);
+        let flags: Vec<&str> = written
+            .lines()
+            .map(|line| line.split_once("] ").expect("a timestamp").1)
+            .collect();
+        assert_eq!(flags.len(), 20_000);
+        assert!(
+            flags
+                .iter()
+                .enumerate()
+                .all(|(i, f)| *f == format!("flag {i}"))
+        );
+    }
+
+    /// Dropping the writer waits for its thread to write what it was handed, however far behind
+    /// it is.
+    #[test]
+    fn dropping_the_writer_waits_for_its_lines() {
+        let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (send, lines) = std::sync::mpsc::channel::<String>();
+        let out = std::sync::Arc::clone(&written);
+        let thread = std::thread::spawn(move || {
+            for line in lines {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                out.lock().unwrap().push(line);
+            }
+        });
+        let writer = LogWriter {
+            send: Some(send),
+            thread: Some(thread),
+        };
+        for i in 0..5 {
+            writer
+                .send
+                .as_ref()
+                .unwrap()
+                .send(format!("flag {i}"))
+                .unwrap();
+        }
+        drop(writer);
+        let expected: Vec<String> = (0..5).map(|i| format!("flag {i}")).collect();
+        assert_eq!(*written.lock().unwrap(), expected);
+    }
 
     #[test]
     fn uuids_are_written_as_the_ban_list_writes_them() {

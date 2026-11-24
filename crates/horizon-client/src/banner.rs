@@ -3,10 +3,11 @@
 //! banners, and the loom rules of `LoomMenu` (selectable patterns, the
 //! six-layer limit and the result stack).
 use crate::{block_entity_render::DYES, items::ItemStack, items::Items};
+use horizon_core::nbt::Tag;
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, fs, path::Path, sync::Arc};
 
-pub use horizon_items::banner_layer::{BannerLayer, layers_from_nbt, layers_to_nbt};
+pub use horizon_items::banner_layer::{BannerLayer, PatternRef, layers_from_nbt, layers_to_nbt};
 
 /// Layers a loom may stack on a banner (`LoomMenu`'s `hasMaxPatterns`).
 pub const MAX_LAYERS: usize = 6;
@@ -17,6 +18,8 @@ pub struct Pattern {
     pub id: Arc<str>,
     /// `asset_id` path, the texture under `entity/banner` and `entity/shield`.
     pub asset: String,
+    /// Pre-formatted `entity/banner/{asset}` sprite key for zero-alloc per-frame banner rendering.
+    banner_texture: String,
     pub translation_key: String,
 }
 
@@ -24,12 +27,16 @@ pub struct Pattern {
 #[derive(Default)]
 pub struct Banners {
     patterns: Vec<Pattern>,
+    /// `Pattern::id` -> index in `patterns` for O(1) lookup.
+    by_id: HashMap<Arc<str>, usize>,
     /// `#minecraft:no_item_required`, in tag order.
     no_item_required: Vec<Arc<str>>,
     /// Item -> `dye` component.
     dyes: HashMap<Arc<str>, Arc<str>>,
     /// Item -> `provides_banner_patterns`, in tag order.
     provided: HashMap<Arc<str>, Vec<Arc<str>>>,
+    /// Banner-pattern tag id -> its members, for a component that names a tag.
+    pattern_tags: HashMap<String, Vec<Arc<str>>>,
 }
 
 fn read_tag(root: &Path, name: &str, depth: u32) -> Vec<Arc<str>> {
@@ -60,13 +67,7 @@ fn read_tag(root: &Path, name: &str, depth: u32) -> Vec<Arc<str>> {
 }
 
 impl Banners {
-    pub fn load(root: &Path) -> Self {
-        Self::load_with_defaults(root, None)
-    }
-    pub(crate) fn load_with_defaults(
-        root: &Path,
-        defaults: Option<&horizon_world::item_defaults::Defaults>,
-    ) -> Self {
+    pub fn load(root: &Path, defaults: &horizon_world::item_defaults::ItemDefaults) -> Self {
         let mut banners = Self::default();
         let mut files: Vec<_> = fs::read_dir(root.join("data/minecraft/banner_pattern"))
             .into_iter()
@@ -91,51 +92,81 @@ impl Banners {
                 .unwrap_or(stem)
                 .trim_start_matches("minecraft:")
                 .to_owned();
+            let id: Arc<str> = Arc::from(format!("minecraft:{stem}").as_str());
+            let banner_texture = format!("entity/banner/{asset}");
+            let index = banners.patterns.len();
+            banners.by_id.insert(id.clone(), index);
             banners.patterns.push(Pattern {
-                id: Arc::from(format!("minecraft:{stem}").as_str()),
+                id,
                 asset,
+                banner_texture,
                 translation_key: v["translation_key"].as_str().unwrap_or_default().to_owned(),
             });
         }
         banners.no_item_required = read_tag(root, "no_item_required", 0);
-        let owned_defaults;
-        let defaults = match defaults {
-            Some(defaults) => Some(defaults),
-            None => {
-                owned_defaults = horizon_world::item_defaults::read(root).ok();
-                owned_defaults.as_ref()
+        // Every tag, `pattern_item/globe` included, for a component naming one.
+        let tags = root.join("data/minecraft/tags/banner_pattern");
+        let mut dirs = vec![tags.clone()];
+        while let Some(dir) = dirs.pop() {
+            for path in fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+            {
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "json")
+                    && let Some(name) = path
+                        .strip_prefix(&tags)
+                        .ok()
+                        .and_then(|p| p.with_extension("").to_str().map(|s| s.replace('\\', "/")))
+                {
+                    let members = read_tag(root, &name, 0);
+                    banners
+                        .pattern_tags
+                        .insert(format!("minecraft:{name}"), members);
+                }
             }
-        };
-        if let Some(raw) = defaults {
-            for (item, c) in raw {
-                let id: Arc<str> = Arc::from(item.as_str());
-                if let Some(dye) = c["minecraft:dye"].as_str() {
-                    banners.dyes.insert(id.clone(), Arc::from(dye));
+        }
+        for (item, c) in defaults.entries() {
+            let id: Arc<str> = Arc::from(item.as_str());
+            if let Some(dye) = c["minecraft:dye"].as_str() {
+                banners.dyes.insert(id.clone(), Arc::from(dye));
+            }
+            match &c["minecraft:provides_banner_patterns"] {
+                Value::String(tag) if tag.starts_with('#') => {
+                    banners.provided.insert(id, read_tag(root, &tag[1..], 0));
                 }
-                match &c["minecraft:provides_banner_patterns"] {
-                    Value::String(tag) if tag.starts_with('#') => {
-                        banners.provided.insert(id, read_tag(root, &tag[1..], 0));
-                    }
-                    Value::String(single) => {
-                        banners
-                            .provided
-                            .insert(id, vec![Arc::from(single.as_str())]);
-                    }
-                    _ => {}
+                Value::String(single) => {
+                    banners
+                        .provided
+                        .insert(id, vec![Arc::from(single.as_str())]);
                 }
+                _ => {}
             }
         }
         banners
     }
     pub fn pattern(&self, id: &str) -> Option<&Pattern> {
-        self.patterns.iter().find(|p| &*p.id == id)
+        self.by_id
+            .get(id)
+            .and_then(|&index| self.patterns.get(index))
+    }
+    /// `Sheets.getBannerSprite` texture name of a pattern, borrowing the pre-formatted
+    /// sprite key for registered patterns without heap allocation.
+    pub fn banner_texture_cow(&self, id: &str) -> Cow<'_, str> {
+        match self.pattern(id) {
+            Some(p) => Cow::Borrowed(&p.banner_texture),
+            None => Cow::Owned(format!(
+                "entity/banner/{}",
+                id.trim_start_matches("minecraft:")
+            )),
+        }
     }
     /// `Sheets.getBannerSprite` texture name of a pattern.
     pub fn banner_texture(&self, id: &str) -> String {
-        match self.pattern(id) {
-            Some(p) => format!("entity/banner/{}", p.asset),
-            None => format!("entity/banner/{}", id.trim_start_matches("minecraft:")),
-        }
+        self.banner_texture_cow(id).into_owned()
     }
     /// `Sheets.getShieldSprite` texture name of a pattern.
     pub fn shield_texture(&self, id: &str) -> String {
@@ -144,42 +175,124 @@ impl Banners {
             None => format!("entity/shield/{}", id.trim_start_matches("minecraft:")),
         }
     }
+    /// `Sheets.getBannerSprite` texture name of a layer: borrows the pre-formatted
+    /// sprite key for registered pattern ids; direct inline holders format their `asset_id`.
+    pub fn layer_texture_cow(&self, layer: &BannerLayer) -> Cow<'_, str> {
+        match &layer.pattern {
+            PatternRef::Id(id) => self.banner_texture_cow(id),
+            PatternRef::Inline { asset, .. } => Cow::Owned(format!(
+                "entity/banner/{}",
+                asset.trim_start_matches("minecraft:")
+            )),
+        }
+    }
+    /// `Sheets.getBannerSprite` texture name of a layer: a direct holder names
+    /// its own `asset_id`.
+    pub fn layer_texture(&self, layer: &BannerLayer) -> String {
+        self.layer_texture_cow(layer).into_owned()
+    }
     /// `BannerPatternLayers.Layer.description` translation key.
     pub fn layer_key(&self, layer: &BannerLayer) -> String {
-        let base = self.pattern(&layer.pattern).map_or_else(
-            || {
-                format!(
-                    "block.minecraft.banner.{}",
-                    layer.pattern.trim_start_matches("minecraft:")
-                )
-            },
-            |p| p.translation_key.clone(),
-        );
+        let base = match &layer.pattern {
+            PatternRef::Inline {
+                translation_key, ..
+            } => translation_key.to_string(),
+            PatternRef::Id(id) => self.pattern(id).map_or_else(
+                || {
+                    format!(
+                        "block.minecraft.banner.{}",
+                        id.trim_start_matches("minecraft:")
+                    )
+                },
+                |p| p.translation_key.clone(),
+            ),
+        };
         format!("{base}.{}", layer.color)
     }
     /// `LoomMenu.isDyeItem`: the dye colour of a loom dye.
     pub fn loom_dye(&self, items: &Items, stack: &ItemStack) -> Option<Arc<str>> {
-        let tagged = items
+        if !items
             .item_tags
             .get("minecraft:loom_dyes")
-            .is_some_and(|t| t.contains(&*stack.item));
-        tagged
-            .then(|| self.dyes.get(&stack.item).cloned())
-            .flatten()
+            .is_some_and(|t| t.contains(&*stack.item))
+        {
+            return None;
+        }
+        let data = stack.data();
+        if data.is_some_and(|d| d.other("!minecraft:dye").is_some()) {
+            return None;
+        }
+        if let Some(Tag::String(color)) = data.and_then(|d| d.other("minecraft:dye")) {
+            return Some(Arc::from(
+                color.to_string_lossy().trim_start_matches("minecraft:"),
+            ));
+        }
+        self.dyes.get(&stack.item).cloned()
     }
-    /// `LoomMenu.isPatternItem`.
+    /// `LoomMenu.isPatternItem`: the item tag and a present
+    /// `provides_banner_patterns` component (the stack's, else the item's).
     pub fn is_pattern_item(&self, items: &Items, stack: &ItemStack) -> bool {
-        items
+        if !items
             .item_tags
             .get("minecraft:loom_patterns")
             .is_some_and(|t| t.contains(&*stack.item))
-            && self.provided.contains_key(&stack.item)
+        {
+            return false;
+        }
+        let data = stack.data();
+        if data.is_some_and(|d| d.other("!minecraft:provides_banner_patterns").is_some()) {
+            return false;
+        }
+        data.is_some_and(|d| d.other("minecraft:provides_banner_patterns").is_some())
+            || self.provided.contains_key(&stack.item)
     }
     /// `LoomMenu.getSelectablePatterns`.
     pub fn selectable(&self, pattern_item: Option<&ItemStack>) -> Vec<Arc<str>> {
         match pattern_item {
             None => self.no_item_required.clone(),
-            Some(stack) => self.provided.get(&stack.item).cloned().unwrap_or_default(),
+            Some(stack) => {
+                let data = stack.data();
+                if data.is_some_and(|d| d.other("!minecraft:provides_banner_patterns").is_some()) {
+                    return Vec::new();
+                }
+                match data.and_then(|d| d.other("minecraft:provides_banner_patterns")) {
+                    Some(tag) => self.provides(tag),
+                    None => self.provided.get(&stack.item).cloned().unwrap_or_default(),
+                }
+            }
+        }
+    }
+    /// A `provides_banner_patterns` value: a pattern id, a tag, or a list of
+    /// either (`HolderSet`'s saved forms).
+    fn provides(&self, tag: &Tag) -> Vec<Arc<str>> {
+        match tag {
+            Tag::String(value) => self.provides_one(&value.to_string_lossy()),
+            Tag::List(values) => values
+                .iter()
+                .flat_map(|value| match value {
+                    Tag::String(value) => self.provides_one(&value.to_string_lossy()),
+                    _ => Vec::new(),
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+    fn provides_one(&self, value: &str) -> Vec<Arc<str>> {
+        // `Identifier.parse`: an id or tag without a namespace is `minecraft`'s.
+        let namespaced = |id: &str| {
+            if id.contains(':') {
+                id.to_owned()
+            } else {
+                format!("minecraft:{id}")
+            }
+        };
+        match value.strip_prefix('#') {
+            Some(tag) => self
+                .pattern_tags
+                .get(&namespaced(tag))
+                .cloned()
+                .unwrap_or_default(),
+            None => vec![Arc::from(namespaced(value))],
         }
     }
 }
@@ -249,6 +362,86 @@ mod tests {
         assert_eq!(&*b.selectable(Some(&item))[0], "minecraft:flower");
     }
     #[test]
+    fn prepared_dye_component() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let defaults = horizon_world::item_defaults::shared(&root).unwrap();
+        let items =
+            Items::tags_only(&root, &horizon_world::loot::PackOverlay::NONE, &defaults).unwrap();
+        let b = Banners::load(&root, &defaults);
+        let mut dye = ItemStack::new("minecraft:white_dye", 1);
+        assert_eq!(&*b.loom_dye(&items, &dye).unwrap(), "white");
+        dye.data_mut()
+            .set_other("minecraft:dye", Some(Tag::String("red".into())));
+        assert_eq!(&*b.loom_dye(&items, &dye).unwrap(), "red");
+        dye.data_mut().set_other(
+            "!minecraft:dye",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        assert!(b.loom_dye(&items, &dye).is_none());
+    }
+    #[test]
+    fn prepared_pattern_component_presence() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let defaults = horizon_world::item_defaults::shared(&root).unwrap();
+        let items =
+            Items::tags_only(&root, &horizon_world::loot::PackOverlay::NONE, &defaults).unwrap();
+        let b = Banners::load(&root, &defaults);
+        let mut pattern = ItemStack::new("minecraft:globe_banner_pattern", 1);
+        assert!(b.is_pattern_item(&items, &pattern));
+        pattern.data_mut().set_other(
+            "!minecraft:provides_banner_patterns",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        assert!(!b.is_pattern_item(&items, &pattern));
+    }
+    #[test]
+    fn prepared_pattern_component_selection() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let defaults = horizon_world::item_defaults::shared(&root).unwrap();
+        let b = Banners::load(&root, &defaults);
+        let mut pattern = ItemStack::new("minecraft:globe_banner_pattern", 1);
+        assert_eq!(&*b.selectable(Some(&pattern))[0], "minecraft:globe");
+        pattern.data_mut().set_other(
+            "minecraft:provides_banner_patterns",
+            Some(Tag::List(vec![Tag::String("minecraft:creeper".into())])),
+        );
+        assert_eq!(&*b.selectable(Some(&pattern))[0], "minecraft:creeper");
+        // One id without its namespace, or a tag, as `HolderSet`'s codec reads them.
+        pattern.data_mut().set_other(
+            "minecraft:provides_banner_patterns",
+            Some(Tag::String("creeper".into())),
+        );
+        assert_eq!(
+            b.selectable(Some(&pattern)),
+            [Arc::from("minecraft:creeper")]
+        );
+        pattern.data_mut().set_other(
+            "minecraft:provides_banner_patterns",
+            Some(Tag::String("#pattern_item/globe".into())),
+        );
+        assert_eq!(b.selectable(Some(&pattern)), [Arc::from("minecraft:globe")]);
+        pattern.data_mut().set_other(
+            "!minecraft:provides_banner_patterns",
+            Some(Tag::compound(Vec::<(&str, Tag)>::new())),
+        );
+        assert!(b.selectable(Some(&pattern)).is_empty());
+    }
+    #[test]
     fn banner_colour_comes_from_the_item() {
         assert_eq!(
             banner_color("minecraft:light_gray_banner"),
@@ -280,7 +473,7 @@ mod tests {
         );
         assert!(tooltip_layers(&banner).is_empty());
         banner.data_mut().custom_name =
-            Some(horizon_world::nbt::Tag::String("Captain's Standard".into()));
+            Some(horizon_core::nbt::Tag::String("Captain's Standard".into()));
         assert!(tooltip_layers(&banner).is_empty());
         banner.data_mut().ominous_banner = false;
         assert_eq!(tooltip_layers(&banner), layers(&banner));
@@ -294,5 +487,39 @@ mod tests {
             BannerLayer::new("minecraft:border", "black"),
         ];
         assert_eq!(layers_from_nbt(Some(&layers_to_nbt(&l))), l);
+    }
+
+    #[test]
+    fn banner_texture_cow_borrows_registered_and_matches_owned() {
+        let mut b = Banners::default();
+        let id: Arc<str> = Arc::from("minecraft:flower");
+        b.by_id.insert(id.clone(), 0);
+        b.patterns.push(Pattern {
+            id,
+            asset: "flower".to_owned(),
+            banner_texture: "entity/banner/flower".to_owned(),
+            translation_key: "block.minecraft.banner.flower".to_owned(),
+        });
+
+        let registered = BannerLayer::new("minecraft:flower", "red");
+        let cow = b.layer_texture_cow(&registered);
+        assert!(matches!(cow, Cow::Borrowed("entity/banner/flower")));
+        assert_eq!(&*cow, b.layer_texture(&registered));
+
+        let fallback = BannerLayer::new("minecraft:custom_pattern", "blue");
+        let cow_fallback = b.layer_texture_cow(&fallback);
+        assert_eq!(&*cow_fallback, "entity/banner/custom_pattern");
+        assert_eq!(&*cow_fallback, b.layer_texture(&fallback));
+
+        let inline = BannerLayer {
+            pattern: PatternRef::Inline {
+                asset: Arc::from("minecraft:inline_art"),
+                translation_key: Arc::from(""),
+            },
+            color: Arc::from("white"),
+        };
+        let cow_inline = b.layer_texture_cow(&inline);
+        assert_eq!(&*cow_inline, "entity/banner/inline_art");
+        assert_eq!(&*cow_inline, b.layer_texture(&inline));
     }
 }
