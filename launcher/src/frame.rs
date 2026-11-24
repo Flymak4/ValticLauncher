@@ -438,13 +438,17 @@ impl Launcher {
     /// Buttons keep the existing native page, account and update actions.
     pub(super) fn glass_topbar(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let compact = self.window_width < 1030.;
+        let compact = self.window_width < 1320.;
+        let smp = self.page == Page::ValticSmp;
+        let edge = if smp { 0x405358 } else { 0xf4a1c6 };
+        let surface = if smp { 0x192b2e } else { 0x241427 };
+        let hover = if smp { 0x354a4a } else { 0xa34d7f };
         let mut nav = div()
             .flex().flex_wrap().items_center()
-            .gap(px(4.)).px(px(6.)).py(px(5.))
-            .rounded(px(27.))
-            .border_1().border_color(ui::color(0xf4a1c6).opacity(0.29))
-            .bg(ui::color(0x241427).opacity(0.93));
+            .gap(px(3.)).px(px(5.)).py(px(4.))
+            .rounded(px(if smp { 13. } else { 27. }))
+            .border_1().border_color(ui::color(edge).opacity(0.65))
+            .bg(ui::color(surface).opacity(0.93));
 
         for (page, label, symbol) in [
             (Page::Play, "Home", "dashboard-square-01"),
@@ -462,9 +466,9 @@ impl Launcher {
                 div()
                     .id(SharedString::from(format!("valtic-top-{label}")))
                     .flex().items_center().justify_center()
-                    .gap(px(8.)).h(px(39.))
-                    .px(px(if compact { 10. } else { 15. }))
-                    .rounded(px(22.))
+                    .gap(px(6.)).h(px(36.))
+                    .px(px(if compact { 8. } else { 13. }))
+                    .rounded(px(if smp { 9. } else { 22. }))
                     .border_1()
                     .border_color(if selected {
                         ui::color(0xffb4da).opacity(0.82)
@@ -476,13 +480,13 @@ impl Launcher {
                     } else {
                         ui::color(0x241427).opacity(0.)
                     })
-                    .hover(|d| d.bg(ui::color(0xa34d7f)))
+                    .hover(move |d| d.bg(ui::color(hover)))
                     .cursor_pointer()
-                    .child(ui::icon(symbol, 17., if selected {
+                    .children((!compact).then(|| ui::icon(symbol, 17., if selected {
                         ui::color(0x261323)
                     } else {
                         gpui::white()
-                    }))
+                    })))
                     .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
                         .text_color(if selected {
                             ui::color(0x261323)
@@ -497,22 +501,19 @@ impl Launcher {
             );
         }
 
-        // Berk-themed tab: independent gold and sea-green styling, not a pink Home instance.
-        let smp_selected = self.page == Page::ValticSmp;
+        // Text-only so the visible label is centred, without an empty SVG slot.
         nav = nav.child(div()
             .id("valtic-top-valtic-smp")
-            .flex().items_center().justify_center().gap(px(7.))
-            .h(px(41.)).px(px(if compact { 9. } else { 13. }))
-            .rounded(px(6.))
-            .border_1().border_color(ui::color(0xe5bb78))
-            .bg(ui::color(if smp_selected { 0x5a806b } else { 0x183940 }))
-            .hover(|d| d.bg(ui::color(0x537b69)))
+            .flex().flex_none().items_center().justify_center()
+            .h(px(36.)).px(px(if compact { 10. } else { 15. }))
+            .rounded(px(9.))
+            .bg(ui::color(if smp { 0xe9bc82 } else { 0x293e3d }))
+            .hover(move |d| d.bg(ui::color(if smp { 0xf4ce9c } else { 0x405553 })))
             .cursor_pointer()
-            .child(gpui::svg().path("valtic/dragon-mark.svg")
-                .w(px(20.)).h(px(20.)))
-            .child(ui::text(12., FontWeight::BOLD, ink::FULL)
-                .text_color(ui::color(0xf4e4bd))
-                .child("ValticSMP SERVER"))
+            .child(ui::text(13., FontWeight::BOLD, ink::FULL)
+                .flex_none().text_center()
+                .text_color(ui::color(if smp { 0x202c29 } else { 0xe9bc82 }))
+                .child("Valtic SMP"))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.go(Page::ValticSmp);
                 cx.notify();
@@ -520,7 +521,7 @@ impl Launcher {
 
         let logo = div()
             .flex().flex_col().flex_none().justify_center()
-            .gap(px(0.)).mr(px(13.))
+            .gap(px(0.)).mr(px(if compact { 2. } else { 10. }))
             .child(ui::text(23., FontWeight::BOLD, ink::FULL)
                 .font_family(theme::DISPLAY_FONT)
                 .child("VALTIC"))
@@ -531,12 +532,12 @@ impl Launcher {
         let update = div()
             .id("valtic-top-update")
             .flex().flex_none().items_center().justify_center()
-            .gap(px(7.)).h(px(43.)).px(px(15.))
-            .rounded(px(25.))
-            .bg(if ready_update { ui::color(0xffd7e9) }
-                else { ui::color(0x392439).opacity(0.92) })
-            .border_1().border_color(ui::color(0xf5a0ce).opacity(0.58))
-            .hover(|d| d.bg(ui::color(0xf4a4c8)))
+            .gap(px(6.)).h(px(42.)).px(px(if compact { 10. } else { 15. }))
+            .rounded(px(if smp { 10. } else { 25. }))
+            .bg(if ready_update { ui::color(if smp { 0xe9bc82 } else { 0xffd7e9 }) }
+                else { ui::color(surface).opacity(0.92) })
+            .border_1().border_color(ui::color(edge).opacity(0.65))
+            .hover(move |d| d.bg(ui::color(hover)))
             .cursor_pointer()
             .child(ui::icon("download-04", 17., if ready_update {
                 ui::color(0x2d172c)
@@ -567,11 +568,11 @@ impl Launcher {
                 .id("valtic-top-account")
                 .flex().items_center().gap(px(9.))
                 .h(px(43.)).px(px(12.))
-                .rounded(px(23.))
-                .border_1().border_color(ui::color(0xf4b5d3).opacity(0.35))
-                .bg(ui::color(0x28162c).opacity(0.94))
+                .rounded(px(if smp { 10. } else { 23. }))
+                .border_1().border_color(ui::color(edge).opacity(0.65))
+                .bg(ui::color(surface).opacity(0.94))
                 .cursor_pointer()
-                .hover(|d| d.bg(ui::color(0x623452)))
+                .hover(move |d| d.bg(ui::color(hover)))
                 .child(
                     div().size(px(27.)).rounded(px(7.)).overflow_hidden()
                         .child(self.profile_heads.draw(
@@ -587,16 +588,16 @@ impl Launcher {
         } else {
             div()
                 .id("valtic-top-microsoft")
-                .flex().items_center().gap(px(9.))
-                .h(px(43.)).px(px(15.))
-                .rounded(px(23.))
-                .border_1().border_color(ui::color(0xf4b5d3).opacity(0.35))
-                .bg(ui::color(0x28162c).opacity(0.94))
-                .hover(|d| d.bg(ui::color(0x623452)))
+                .flex().flex_none().items_center().justify_center().gap(px(8.))
+                .h(px(43.)).px(px(if compact { 10. } else { 15. }))
+                .rounded(px(if smp { 10. } else { 23. }))
+                .border_1().border_color(ui::color(edge).opacity(0.65))
+                .bg(ui::color(surface).opacity(0.94))
+                .hover(move |d| d.bg(ui::color(hover)))
                 .cursor_pointer()
                 .child(microsoft::logo(17.))
                 .child(ui::text(13., FontWeight::SEMIBOLD, ink::FULL)
-                    .child("Sign in with Microsoft"))
+                    .child(if compact { "Sign in" } else { "Sign in with Microsoft" }))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.sign_in_to_play();
                     cx.notify();
