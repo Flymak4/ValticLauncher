@@ -536,6 +536,36 @@ impl Launcher {
             }
         }
 
+        // One short, dim shooting star every 11 seconds, above the text.
+        // The small tail is made of fading points so no transform or image is needed.
+        if !crate::motion::still() {
+            use gpui::AnimationExt;
+            let meteor = div().absolute().w(px(14.)).h(px(6.))
+                .child(div().absolute().left(px(0.)).top(px(0.))
+                    .size(px(1.)).rounded(px(1.))
+                    .bg(ui::color(0xc5b5e8).opacity(0.25)))
+                .child(div().absolute().left(px(4.)).top(px(1.))
+                    .size(px(1.3)).rounded(px(1.))
+                    .bg(ui::color(0xd5dfff).opacity(0.50)))
+                .child(div().absolute().left(px(8.)).top(px(2.))
+                    .size(px(1.6)).rounded(px(1.))
+                    .bg(ui::color(0xe9d8ff).opacity(0.75)))
+                .child(div().absolute().left(px(12.)).top(px(3.))
+                    .size(px(2.)).rounded(px(1.))
+                    .bg(gpui::white()));
+            stars = stars.child(meteor.with_animation(
+                "valtic-smp-meteor",
+                gpui::Animation::new(std::time::Duration::from_secs(11)).repeat(),
+                |d, p| {
+                    let t = ((p - 0.70) / 0.12).clamp(0., 1.);
+                    let opacity = (t * std::f32::consts::PI).sin().max(0.) * 0.75;
+                    d.left(gpui::relative(0.08 + t * 0.73))
+                        .top(px(2. + t * 4.))
+                        .opacity(opacity)
+                },
+            ));
+        }
+
         nav = nav.child(div()
             .id("valtic-top-valtic-smp")
             .relative().overflow_hidden()
