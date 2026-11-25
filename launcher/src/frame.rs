@@ -501,18 +501,54 @@ impl Launcher {
             );
         }
 
-        // Text-only so the visible label is centred, without an empty SVG slot.
+        // A quiet night sky, contained inside the existing text-only tab.
+        // Keep the stars away from the middle of the label and honour reduced motion.
+        let mut stars = div().absolute().top_0().left_0().size_full();
+        for (index, (x, y, size, phase)) in [
+            (0.08, 0.19, 1.5, 0.00),
+            (0.24, 0.13, 1.2, 0.35),
+            (0.46, 0.20, 1.7, 0.66),
+            (0.73, 0.12, 1.2, 0.18),
+            (0.90, 0.25, 2.0, 0.48),
+            (0.09, 0.73, 1.3, 0.74),
+            (0.31, 0.84, 1.6, 0.24),
+            (0.61, 0.79, 1.2, 0.56),
+            (0.83, 0.85, 1.8, 0.89),
+        ].into_iter().enumerate() {
+            let star = div().absolute()
+                .left(gpui::relative(x)).top(gpui::relative(y))
+                .size(px(size)).rounded(px(size))
+                .bg(ui::color(if index % 3 == 0 { 0xf3c8ed } else { 0xd5dfff }));
+            if crate::motion::still() {
+                stars = stars.child(star.opacity(0.65));
+            } else {
+                use gpui::AnimationExt;
+                stars = stars.child(star.with_animation(
+                    gpui::ElementId::named_usize("valtic-smp-star", index),
+                    gpui::Animation::new(std::time::Duration::from_millis(
+                        3000 + (index as u64 % 4) * 700,
+                    )).repeat(),
+                    move |d, p| {
+                        let wave = ((p + phase) * std::f32::consts::TAU).cos();
+                        d.opacity(0.50 + 0.30 * wave)
+                    },
+                ));
+            }
+        }
+
         nav = nav.child(div()
             .id("valtic-top-valtic-smp")
+            .relative().overflow_hidden()
             .flex().flex_none().items_center().justify_center()
             .h(px(36.)).px(px(if compact { 10. } else { 15. }))
             .rounded(px(9.))
-            .bg(ui::color(if smp { 0xe9bc82 } else { 0x293e3d }))
-            .hover(move |d| d.bg(ui::color(if smp { 0xf4ce9c } else { 0x405553 })))
+            .bg(ui::color(if smp { 0x33304f } else { 0x211e36 }))
+            .hover(move |d| d.bg(ui::color(if smp { 0x42395c } else { 0x302944 })))
             .cursor_pointer()
+            .child(stars)
             .child(ui::text(13., FontWeight::BOLD, ink::FULL)
                 .flex_none().text_center()
-                .text_color(ui::color(if smp { 0x202c29 } else { 0xe9bc82 }))
+                .text_color(gpui::white())
                 .child("Valtic SMP"))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.go(Page::ValticSmp);
